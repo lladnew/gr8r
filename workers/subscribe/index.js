@@ -305,6 +305,7 @@ export default {
         headers: corsHeaders
       });
     }
+    //added this block to fix CORS error?
       return new Response("Not Found", {
       status: 404,
       headers: corsHeaders

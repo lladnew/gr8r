@@ -9,6 +9,10 @@ on:
       workerName:
         required: true
         type: string
+    secrets:
+      CF_API_TOKEN:
+        required: true
+
 
 jobs:
   deploy:
