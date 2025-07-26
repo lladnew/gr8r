@@ -298,17 +298,19 @@ export default {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
-    } catch (error) {
+       } catch (error) {
       console.error("Error processing request:", error);
       return new Response("Internal Server Error", {
         status: 500,
         headers: corsHeaders
       });
     }
-    //added this block to fix CORS error?
-      return new Response("Not Found", {
+
+    // ✅ This is outside the try/catch — will catch all unmatched paths
+    return new Response("Not Found", {
       status: 404,
       headers: corsHeaders
     });
   }
 };
+
