@@ -17,5 +17,6 @@ jobs:
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}
+          wranglerVersion: '4.26.0'
           workingDirectory: workers/videosdb1
-          command: publish --verbose
+          command: deploy
