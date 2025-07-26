@@ -8,7 +8,7 @@ on:
 
 jobs:
   call-pages-deploy:
-    uses: ./.github/workflows/_deploy-sites.yml
+    uses: ./.github/workflows/deploy/_deploy-sites.yml
     with:
       siteDirectory: sites/subscribe
       projectName: gr8terthings-forms
