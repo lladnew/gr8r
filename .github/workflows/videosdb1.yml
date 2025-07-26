@@ -7,32 +7,8 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-    name: Deploy videosdb1 to Cloudflare
-
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-      ACTIONS_STEP_DEBUG: true
-
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Verify working directory contents
-        run: ls -la
-        working-directory: workers/videosdb1
-
-      - name: Print Node & Wrangler version
-        run: |
-          echo "Node version:"
-          node -v
-          echo "Wrangler version:"
-          npx wrangler --version
-        working-directory: workers/videosdb1
-
-      - name: Manual deploy with Wrangler
-        run: |
-          echo "Starting Wrangler deploy..."
-          npx wrangler deploy
-        working-directory: workers/videosdb1
+    uses: ./.github/workflows/_deploy-worker.yml
+    with:
+      workingDirectory: workers/videosdb1
+      workerName: videosdb1
 

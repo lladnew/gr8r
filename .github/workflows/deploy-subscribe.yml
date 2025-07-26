@@ -7,16 +7,7 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-    name: Deploy subscribe to Cloudflare
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Set up Wrangler
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CF_API_TOKEN }}
-          wranglerVersion: '4.26.0'
-          workingDirectory: workers/subscribe
-          command: deploy
+    uses: ./.github/workflows/_deploy-worker.yml
+    with:
+      workingDirectory: workers/subscribe
+      workerName: subscribe

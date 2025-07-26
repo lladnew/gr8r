@@ -1,0 +1,33 @@
+name: Reusable Worker Deployment
+
+on:
+  workflow_call:
+    inputs:
+      workingDirectory:
+        required: true
+        type: string
+      workerName:
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy ${{ inputs.workerName }} to Cloudflare
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Log context
+        run: |
+          echo "Branch: ${{ github.ref }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Deploying ${{ inputs.workerName }} Worker..."
+
+      - name: Set up Wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          wranglerVersion: '4.26.0'
+          workingDirectory: ${{ inputs.workingDirectory }}
+          command: deploy --log-level debug
