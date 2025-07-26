@@ -1,5 +1,4 @@
 name = "gr8terthings-forms"           # ← purely for human referencecd 
-account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
 
 # This tells Wrangler where to find the output directory for Pages deploys
 pages_build_output_dir = "."
