@@ -143,6 +143,7 @@ Changelog:
       setTimeout(() => { progressBar.style.width = '100%'; }, 50);
 
       try {
+        //updated fetch URL
         const airtableRes = await fetch("https://api.gr8r.com/api/subscribe", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

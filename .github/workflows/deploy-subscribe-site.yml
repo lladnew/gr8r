@@ -10,7 +10,7 @@ jobs:
   call-pages-deploy:
     uses: ./.github/workflows/_deploy-sites.yml
     with:
-      WorkingDirectory: sites/subscribe
+      siteDirectory: sites/subscribe
       projectName: gr8terthings-forms
     secrets:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
