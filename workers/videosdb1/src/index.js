@@ -49,7 +49,7 @@ export default {
 				);
 
 				await stmt.run();
-				//added Grafana logging here for new video
+				//added Grafana logging here for new videos
 				await env.GRAFANA_WORKER.fetch("http://log", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
