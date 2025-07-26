@@ -1,0 +1,22 @@
+name: Deploy subscribe Worker
+
+on:
+  push:
+    paths:
+      - 'workers/subscribe/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy subscribe to Cloudflare
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          wranglerVersion: '4.26.0'
+          workingDirectory: workers/subscribe
+          command: deploy
