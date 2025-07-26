@@ -1,0 +1,179 @@
+<!-- Gr8terThings Subscribe Form v2.0.9 -->
+<!--
+Changelog:
+- revised URLs of logos to use assets.gr8r.com
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Subscribe – Gr8terThings</title>
+
+  <link rel="preload" as="image" href="https://assets.gr8r.com/GR8R_logo_ascending_grow_stairs.png">
+
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      background-color: #fff;
+      color: #003E24;
+      padding: 2em;
+    }
+    #loading-spinner {
+      display: none;
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background-color: rgba(255, 255, 255, 0.95);
+      z-index: 9999;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+    }
+    .spinner-logo {
+      width: 80px; height: 80px;
+      border-radius: 50%;
+      animation: spin 1.2s linear infinite;
+      margin-bottom: 20px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .spinner-message {
+      font-size: 1.3em;
+      font-weight: bold;
+      color: #003E24;
+      margin-bottom: 20px;
+    }
+    .progress-container {
+      width: 200px;
+      height: 10px;
+      background-color: #eee;
+      border-radius: 5px;
+      overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background-color: #B44E00;
+      transition: width 4s linear;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="loading-spinner">
+    <img class="spinner-logo" src="https://assets.gr8r.com/GR8R_logo_ascending_grow_stairs.png" alt="Logo" onerror="this.style.display='none';">
+    <div class="spinner-message">Unlocking Gr8ter Things!</div>
+    <div class="progress-container"><div class="progress-bar" id="progress-bar"></div></div>
+  </div>
+
+  <form id="subscriber-form" style="max-width: 480px; margin: auto;">
+    <fieldset style="margin-bottom: 20px; border: none;">
+      <legend style="font-weight: bold; font-size: 1.1em; margin-bottom: 10px;">Free Daily 1-Minute Video Sign Up</legend>
+      <input type="text" id="firstName" placeholder="First Name" required style="width: 100%; padding: 10px; margin-bottom: 10px;">
+      <input type="text" id="lastName" placeholder="Last Name (Optional)" style="width: 100%; padding: 10px; margin-bottom: 10px;">
+      <input type="email" id="emailAddress" placeholder="Email Address" required style="width: 100%; padding: 10px; margin-bottom: 10px;">
+      <input type="checkbox" id="pivot-opt-in" checked>
+      <label for="pivot-opt-in"><strong>Free Gift</strong> – Send my daily 1-minute motivation video</label>
+      <p style="font-size: 0.75rem; margin-top: 10px;">We respect your <a href="https://emailoctopus.com/legal/privacy" target="_blank" style="color: #003E24; text-decoration: underline;">email privacy</a></p>
+    </fieldset>
+
+    <div style="text-align: center; margin: 20px 0;">
+      <button type="submit" style="background-color: #B44E00; color: #fff; padding: 14px 24px; border: none; border-radius: 30px; font-size: 20px; cursor: pointer; width: 50%;">Subscribe</button>
+    </div>
+
+    <fieldset style="margin-bottom: 20px; border: none;">
+      <legend style="font-weight: bold; font-size: 1.1em; margin-bottom: 10px;">Want Optional SMS Updates?</legend>
+      <input type="text" id="phoneNumber" placeholder="Phone Number (Optional)" style="width: 100%; padding: 10px; margin-bottom: 10px;">
+      <input type="checkbox" id="sms-text"><label for="sms-text">Yes, I want to receive SMS updates</label>
+    </fieldset>
+
+    <div style="text-align: center; margin-top: 20px;">
+      <img src="https://assets.gr8r.com/GR8R_Full_Logo_3850X2459.png" alt="Gr8terThings Logo" style="width: 100%; height: auto;">
+    </div>
+  </form>
+
+  <script>
+    const form = document.getElementById('subscriber-form');
+    const spinner = document.getElementById('loading-spinner');
+    const progressBar = document.getElementById('progress-bar');
+
+    function getSource() {
+      const referrer = document.referrer || "Direct";
+      const page = window.location.href;
+      const timestamp = new Date().toISOString();
+      return `${referrer} | ${page} | ${timestamp}`;
+    }
+
+    form.addEventListener('submit', async function (e) {
+      e.preventDefault();
+      console.log("Gr8terThings Subscribe Form v2.0.6");
+
+      const firstName = document.getElementById('firstName').value.trim();
+      const lastName = document.getElementById('lastName').value.trim();
+      const emailAddress = document.getElementById('emailAddress').value.trim();
+      const phoneNumber = document.getElementById('phoneNumber').value.trim();
+
+      const wantsText = document.getElementById('sms-text').checked;
+      const wantsEmail = document.getElementById('pivot-opt-in').checked;
+
+      const deliveryPreference = wantsText && wantsEmail ? 'Both' :
+                                  wantsText ? 'Text' :
+                                  wantsEmail ? 'Email' : '';
+
+      const campaignTags = ['Newsletter'];
+      if (wantsEmail) campaignTags.push('Pivot Year');
+
+      const data = {
+        firstName,
+        lastName,
+        emailAddress,
+        phoneNumber,
+        DeliveryPreference: deliveryPreference,
+        CampaignInterest: campaignTags.join(", "),
+        source: getSource()
+      };
+
+      console.log("Submitting with:", data);
+
+      spinner.style.display = 'flex';
+      setTimeout(() => { progressBar.style.width = '100%'; }, 50);
+
+      try {
+        const airtableRes = await fetch("https://api.gr8r.com/api/subscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data)
+        });
+
+        if (!airtableRes.ok) {
+          const errText = await airtableRes.text();
+          throw new Error(errText);
+        }
+
+        const airtableJson = await airtableRes.json();
+
+        const redirectUrl = airtableJson.status === "updated"
+          ? "https://www.gr8terthings.com/thank-you-updated"
+          : "https://www.gr8terthings.com/thank-you";
+
+        setTimeout(() => {
+          window.location.href = redirectUrl;
+        }, 4000);
+
+      } catch (err) {
+        let message = "There was an error submitting your info. Please try again later.";
+        if (err.message.includes("duplicate") || err.message.includes("already")) {
+          message = "You're already subscribed — no need to resubmit.";
+        }
+        alert(message);
+        console.error("Submission Error:", err);
+        spinner.style.display = 'none';
+      }
+    });
+  </script>
+</body>
+</html>

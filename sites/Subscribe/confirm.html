@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gr8terThings Confirmation</title>
+  <style>
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      background-color: #f9f9f9;
+      margin: 0;
+      padding: 0;
+      color: #003E24;
+    }
+    .container {
+      max-width: 600px;
+      margin: 50px auto;
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.05);
+      text-align: center;
+    }
+    .logo {
+      max-width: 200px;
+      margin: 0 auto 20px;
+      display: block;
+    }
+    .message {
+      font-size: 1.25rem;
+      margin-top: 20px;
+    }
+    .footer {
+      font-size: 0.85em;
+      color: #777;
+      margin-top: 40px;
+      text-align: center;
+    }
+    .spinner {
+      font-size: 1rem;
+      margin-top: 1rem;
+      color: #999;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <img src="https://assets.gr8r.com/GR8R_Full_Logo_2048X1308.png" alt="Gr8terThings Logo" class="logo" />
+    <h1>Confirming your subscription...</h1>
+    <div id="message" class="message">
+      <div class="spinner">Please wait while we confirm your subscription.</div>
+    </div>
+    <div class="footer">
+      If you reached this page by mistake, no further action is needed.
+    </div>
+  </div>
+
+  <script>
+    async function confirmSubscription() {
+      const params = new URLSearchParams(window.location.search);
+      const email = params.get("email");
+
+      const messageEl = document.getElementById("message");
+
+      if (!email) {
+        messageEl.innerHTML = "⚠️ Missing email address in the confirmation link.";
+        return;
+      }
+
+      try {
+        const res = await fetch(`https://gr8r-subscribe-worker.gr8r.workers.dev/api/confirm?email=${encodeURIComponent(email)}`);
+        const data = await res.json();
+
+        if (data.status === "subscribed") {
+          messageEl.innerHTML = "✅ Thank you for subscribing to Gr8terThings!";
+        } else if (data.status === "already_subscribed") {
+          messageEl.innerHTML = "✅ You're already subscribed to Gr8terThings!";
+        } else if (data.status === "not_found") {
+          messageEl.innerHTML = "⚠️ We couldn't find a subscription for this email.";
+        } else {
+          messageEl.innerHTML = "⚠️ Something unexpected happened. Please try again later.";
+        }
+      } catch (err) {
+        console.error(err);
+        messageEl.innerHTML = "❌ An error occurred. Please refresh or try again later.";
+      }
+    }
+
+    confirmSubscription();
+  </script>
+</body>
+</html>

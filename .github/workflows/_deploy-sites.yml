@@ -1,0 +1,52 @@
+name: Reusable Pages Deployment
+
+on:
+  workflow_call:
+    inputs:
+      siteDirectory:
+        required: true
+        type: string
+      projectName:
+        required: true
+        type: string
+    secrets:
+      CF_API_TOKEN:
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy ${{ inputs.projectName }} to Cloudflare Pages
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Log context
+        run: |
+          echo "Branch: ${{ github.ref }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Deploying site '${{ inputs.projectName }}' from '${{ inputs.siteDirectory }}'"
+
+      - name: Install Wrangler
+        run: npm install -g wrangler@4.26.0
+
+      - name: Deploy to Pages
+        run: |
+          export CLOUDFLARE_API_TOKEN=${{ secrets.CF_API_TOKEN }}
+          wrangler pages deploy ${{ inputs.siteDirectory }} --project-name=${{ inputs.projectName }}
+
+      - name: Dump site directory (on failure)
+        if: failure()
+        run: |
+          echo "Contents of ${{ inputs.siteDirectory }}:"
+          ls -la ${{ inputs.siteDirectory }}
+          echo "--- index.html ---"
+          cat ${{ inputs.siteDirectory }}/index.html || echo "Missing index.html"
+
+      - name: Output Wrangler error log (on failure)
+        if: failure()
+        run: |
+          echo "--- Wrangler Error Log ---"
+          cat ~/.config/.wrangler/logs/*.log || echo "No logs found"
+
