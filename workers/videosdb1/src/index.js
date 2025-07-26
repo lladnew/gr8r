@@ -49,6 +49,7 @@ export default {
 				);
 
 				await stmt.run();
+				//added Grafana logging here for new video
 				await env.GRAFANA_WORKER.fetch("http://log", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
@@ -63,6 +64,7 @@ export default {
 				return new Response("Imported", { status: 200 });
 
 			} catch (err) {
+				//added Grafana logging here for errors
 				await env.GRAFANA_WORKER.fetch("http://log", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
@@ -117,4 +119,3 @@ export default {
 		return new Response("Not found", { status: 404 });
 	},
 };
-
