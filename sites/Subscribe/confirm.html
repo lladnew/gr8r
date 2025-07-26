@@ -68,6 +68,7 @@
       }
 
       try {
+        //does the URL below need changed?
         const res = await fetch(`https://gr8r-subscribe-worker.gr8r.workers.dev/api/confirm?email=${encodeURIComponent(email)}`);
         const data = await res.json();
 
