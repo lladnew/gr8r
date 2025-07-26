@@ -11,3 +11,5 @@ jobs:
     with:
       workingDirectory: workers/subscribe
       workerName: subscribe
+    secrets:
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

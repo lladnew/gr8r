@@ -11,4 +11,5 @@ jobs:
     with:
       workingDirectory: workers/videosdb1
       workerName: videosdb1
-
+    secrets:
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
