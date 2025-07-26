@@ -1,0 +1,15 @@
+name = "gr8r-videosdb1-worker"
+main = "src/index.js"
+compatibility_date = "2025-07-25"
+
+[observability]
+enabled = true
+
+[[services]]
+binding = "GRAFANA_WORKER"
+service = "gr8r-grafana-worker"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "videos"
+database_id = "89df58ad-bb5e-4569-a4f0-a35b88a7f2d4"
