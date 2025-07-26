@@ -6,3 +6,4 @@ account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
 [[routes]]
 pattern = "api.gr8r.com/api/subscribe*"
 zone_name = "gr8r.com"
+
