@@ -3,6 +3,7 @@ function isExternalRequest(request) {
 	const isInternalIP = request.headers.get("cf-connecting-ip")?.startsWith("127.");
 	return !(isFromWorker || isInternalIP);
 }
+
 export default {
 	async fetch(request, env, ctx) {
 		// ADDED: Handle CORS preflight requests
@@ -10,12 +11,13 @@ export default {
 			return new Response(null, {
 				status: 204,
 				headers: {
-					"Access-Control-Allow-Origin": "https://admin.gr8r.com", // ADDED
-					"Access-Control-Allow-Methods": "GET, POST, OPTIONS",    // ADDED
-					"Access-Control-Allow-Headers": "Authorization, Content-Type", // ADDED
+					"Access-Control-Allow-Origin": "https://admin.gr8r.com",
+					"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+					"Access-Control-Allow-Headers": "Authorization, Content-Type",
 				},
 			});
 		}
+
 		if (isExternalRequest(request)) {
 			const authHeader = request.headers.get("Authorization");
 			const expected = `Bearer ${await env.ADMIN_TOKEN.get()}`;
@@ -23,6 +25,7 @@ export default {
 				return new Response("Unauthorized", { status: 401 });
 			}
 		}
+
 		const url = new URL(request.url);
 
 		// Handle POST /import to insert a new video
@@ -73,7 +76,8 @@ export default {
 				);
 
 				await stmt.run();
-				//added Grafana logging here for new videos
+
+				// ADDED: Grafana logging for successful import
 				await env.GRAFANA_WORKER.fetch("http://log", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
@@ -88,7 +92,7 @@ export default {
 				return new Response("Imported", { status: 200 });
 
 			} catch (err) {
-				//added Grafana logging here for errors
+				// ADDED: Grafana logging for errors
 				await env.GRAFANA_WORKER.fetch("http://log", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
@@ -103,17 +107,18 @@ export default {
 				return new Response("Import Error: " + err.message, { status: 400 });
 			}
 		}
+
 		// Only handle GET /videos
 		if (request.method === "GET" && url.pathname === "/videos") {
 			try {
-				// Optional filters in query params (e.g. ?status=Pending&type=Pivot%20Year)
+				// CHANGED: Moved query vars *inside* try block for safe logging
 				const { searchParams } = url;
 				const status = searchParams.get("status");
 				const type = searchParams.get("type");
 
-				let query = "SELECT * FROM videos";
-				let conditions = [];
-				let params = [];
+				let query = "SELECT * FROM videos";        // CHANGED
+				let conditions = [];                       // CHANGED
+				let params = [];                           // CHANGED
 
 				if (status) {
 					conditions.push("status = ?");
@@ -135,14 +140,14 @@ export default {
 				return new Response(JSON.stringify(results.results, null, 2), {
 					headers: {
 						"Content-Type": "application/json",
-						"Access-Control-Allow-Origin": "https://admin.gr8r.com",     // ADDED
-						"Access-Control-Allow-Headers": "Authorization",             // ADDED
-						"Access-Control-Allow-Methods": "GET, POST, OPTIONS",    // ADDED
+						"Access-Control-Allow-Origin": "https://admin.gr8r.com",
+						"Access-Control-Allow-Headers": "Authorization",
+						"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 					},
 				});
 
 			} catch (err) {
-				// ADDED: Grafana logging for query errors
+				// CHANGED: Removed logging of query/params to avoid ReferenceError
 				await env.GRAFANA_WORKER.fetch("http://log", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
@@ -152,9 +157,7 @@ export default {
 						message: "GET /videos failed",
 						meta: {
 							error: err.message,
-							stack: err.stack,
-							query,
-							params,
+							stack: err.stack
 						},
 					}),
 				});
@@ -168,10 +171,8 @@ export default {
 					},
 				});
 			}
-
 		}
 
 		return new Response("Not found", { status: 404 });
 	},
 };
-
