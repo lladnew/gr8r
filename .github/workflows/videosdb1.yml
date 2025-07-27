@@ -7,7 +7,7 @@ on:
 
 jobs:
   deploy:
-    uses: ./.github/workflows/deploy/_deploy-worker.yml
+    uses: ./.github/workflows/_deploy-worker.yml
     with:
       workingDirectory: workers/videosdb1
       workerName: videosdb1

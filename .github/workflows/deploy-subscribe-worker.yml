@@ -5,11 +5,11 @@ on:
     paths:
       - 'workers/subscribe/**'
       - '.github/workflows/deploy-subscribe-worker.yml'
-      - '.github/workflows_deploy-worker.yml'   # ← Add this
+      - '.github/workflows/_deploy-worker.yml'   # ← Add this
 
 jobs:
   deploy:
-    uses: ./.github/workflows_deploy-worker.yml
+    uses: ./.github/workflows/_deploy-worker.yml
     with:
       workingDirectory: workers/subscribe
       workerName: subscribe
