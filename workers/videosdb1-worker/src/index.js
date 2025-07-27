@@ -5,15 +5,6 @@ function isExternalRequest(request) {
 }
 export default {
 	async fetch(request, env, ctx) {
-
-		if (isExternalRequest(request)) {
-			const authHeader = request.headers.get("Authorization");
-			const expected = `Bearer ${await env.ADMIN_TOKEN.get()}`;
-			if (authHeader !== expected) {
-				return new Response("Unauthorized", { status: 401 });
-			}
-		}
-		const url = new URL(request.url);
 		// ADDED: Handle CORS preflight requests
 		if (request.method === "OPTIONS") {
 			return new Response(null, {
@@ -25,6 +16,14 @@ export default {
 				},
 			});
 		}
+		if (isExternalRequest(request)) {
+			const authHeader = request.headers.get("Authorization");
+			const expected = `Bearer ${await env.ADMIN_TOKEN.get()}`;
+			if (authHeader !== expected) {
+				return new Response("Unauthorized", { status: 401 });
+			}
+		}
+		const url = new URL(request.url);
 
 		// Handle POST /import to insert a new video
 		if (request.method === "POST" && url.pathname === "/import") {
@@ -138,6 +137,7 @@ export default {
 						"Content-Type": "application/json",
 						"Access-Control-Allow-Origin": "https://admin.gr8r.com",     // ADDED
 						"Access-Control-Allow-Headers": "Authorization",             // ADDED
+						"Access-Control-Allow-Methods": "GET, POST, OPTIONS",    // ADDED
 					},
 				});
 
