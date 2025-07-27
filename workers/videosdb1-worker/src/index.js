@@ -142,8 +142,33 @@ export default {
 				});
 
 			} catch (err) {
-				return new Response(`Error: ${err.message}`, { status: 500 });
+				// ADDED: Grafana logging for query errors
+				await env.GRAFANA_WORKER.fetch("http://log", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						source: "gr8r-videosdb1-worker",
+						level: "error",
+						message: "GET /videos failed",
+						meta: {
+							error: err.message,
+							stack: err.stack,
+							query,
+							params,
+						},
+					}),
+				});
+
+				return new Response(`Error: ${err.message}`, {
+					status: 500,
+					headers: {
+						"Access-Control-Allow-Origin": "https://admin.gr8r.com",
+						"Access-Control-Allow-Headers": "Authorization",
+						"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+					},
+				});
 			}
+
 		}
 
 		return new Response("Not found", { status: 404 });
