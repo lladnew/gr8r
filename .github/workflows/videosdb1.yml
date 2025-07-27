@@ -4,6 +4,9 @@ on:
   push:
     paths:
       - 'workers/videosdb1/**'
+      - '.github/workflows/videosdb1.yml'
+      - '.github/workflows/_deploy-worker.yml'
+      
 
 jobs:
   deploy:
