@@ -1,7 +1,7 @@
 (async function loadRecords() {
   const API_URL = "https://gr8r-videosdb1-worker.gr8r.workers.dev"; // Update if needed
 
-  const res = await fetch(`${API_URL}/records`, {
+  const res = await fetch(`${API_URL}/videos`, {
     headers: {
       Authorization: `Bearer ${window.GR8R_ADMIN_TOKEN}`,
     },
