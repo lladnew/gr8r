@@ -1,0 +1,24 @@
+name = "gr8r-r2sign-worker"
+main = "dist/index.mjs"
+compatibility_date = "2025-07-11"
+workers_dev = false
+account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
+
+[[routes]]
+pattern = "r2sign.gr8r.com/*"
+zone_name = "gr8r.com"
+
+[[r2_buckets]]
+binding = "VIDEO_BUCKET"
+bucket_name = "videos-gr8r"
+
+[build]
+command = "npm install && npm run build"
+
+[vars]
+# other env vars if needed
+
+[[services]]
+binding = "GRAFANA_WORKER"
+service = "gr8r-grafana-worker"
+

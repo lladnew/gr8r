@@ -1,0 +1,17 @@
+name: Deploy R2 Sign Worker
+
+on:
+  push:
+    paths:
+      - "workers/r2sign/**"
+      - ".github/workflows/deploy-r2sign-worker.yml"
+      - ".github/workflows/_deploy-worker.yml"
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_deploy-worker.yml
+    with:
+      workingDirectory: workers/r2sign
+      workerName: gr8r-r2sign-worker
+    secrets:
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
