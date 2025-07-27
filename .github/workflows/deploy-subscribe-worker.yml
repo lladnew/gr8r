@@ -3,7 +3,7 @@ name: Deploy subscribe-worker
 on:
   push:
     paths:
-      - 'workers/subscribe/**'
+      - 'workers/subscribe-worker/**'
       - '.github/workflows/deploy-subscribe-worker.yml'
       - '.github/workflows/_deploy-worker.yml'   # ← Add this
 
@@ -11,7 +11,7 @@ jobs:
   deploy:
     uses: ./.github/workflows/_deploy-worker.yml
     with:
-      workingDirectory: workers/subscribe
+      workingDirectory: workers/subscribe-worker
       workerName: subscribe
     secrets:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

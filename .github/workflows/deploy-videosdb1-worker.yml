@@ -3,8 +3,8 @@ name: Deploy videosdb1 Worker
 on:
   push:
     paths:
-      - 'workers/videosdb1/**'
-      - '.github/workflows/videosdb1.yml'
+      - 'workers/videosdb1-worker/**'
+      - '.github/workflows/videosdb1-worker.yml'
       - '.github/workflows/_deploy-worker.yml'
       
 
@@ -12,7 +12,7 @@ jobs:
   deploy:
     uses: ./.github/workflows/_deploy-worker.yml
     with:
-      workingDirectory: workers/videosdb1
-      workerName: videosdb1
+      workingDirectory: workers/videosdb1-worker
+      workerName: videosdb1-worker
     secrets:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
