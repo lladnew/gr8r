@@ -4,10 +4,12 @@ on:
   push:
     paths:
       - 'workers/subscribe/**'
+      - '.github/workflows/deploy-subscribe-worker.yml'
+      - '.github/workflows_deploy-worker.yml'   # ← Add this
 
 jobs:
   deploy:
-    uses: ./.github/workflows/deploy/_deploy-worker.yml
+    uses: ./.github/workflows_deploy-worker.yml
     with:
       workingDirectory: workers/subscribe
       workerName: subscribe
