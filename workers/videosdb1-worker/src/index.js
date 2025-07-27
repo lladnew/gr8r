@@ -14,6 +14,18 @@ export default {
 			}
 		}
 		const url = new URL(request.url);
+		// ADDED: Handle CORS preflight requests
+		if (request.method === "OPTIONS") {
+			return new Response(null, {
+				status: 204,
+				headers: {
+					"Access-Control-Allow-Origin": "https://admin.gr8r.com", // ADDED
+					"Access-Control-Allow-Methods": "GET, POST, OPTIONS",    // ADDED
+					"Access-Control-Allow-Headers": "Authorization, Content-Type", // ADDED
+				},
+			});
+		}
+
 		// Handle POST /import to insert a new video
 		if (request.method === "POST" && url.pathname === "/import") {
 			try {
@@ -122,8 +134,13 @@ export default {
 				const results = await env.DB.prepare(query).bind(...params).all();
 
 				return new Response(JSON.stringify(results.results, null, 2), {
-					headers: { "Content-Type": "application/json" },
+					headers: {
+						"Content-Type": "application/json",
+						"Access-Control-Allow-Origin": "https://admin.gr8r.com",     // ADDED
+						"Access-Control-Allow-Headers": "Authorization",             // ADDED
+					},
 				});
+
 			} catch (err) {
 				return new Response(`Error: ${err.message}`, { status: 500 });
 			}
