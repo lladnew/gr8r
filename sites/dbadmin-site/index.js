@@ -13,17 +13,17 @@
     return;
   }
 
-  const data = await res.json();
+  const records = await res.json();
+  const rows = records.map((record) => {
 
-  const rows = data.records.map((record) => {
     return `
       <tr>
         <td class="px-6 py-4 whitespace-nowrap">${record.title || "-"}</td>
         <td class="px-6 py-4 whitespace-nowrap">${record.status || "-"}</td>
         <td class="px-6 py-4 whitespace-nowrap">
-          ${record.r2Url ? `<a href="${record.r2Url}" class="text-blue-600 underline" target="_blank">Link</a>` : "-"}
+          ${record.r2_Url ? `<a href="${record.r2_Url}" class="text-blue-600 underline" target="_blank">Link</a>` : "-"}
         </td>
-        <td class="px-6 py-4 whitespace-nowrap">${record.scheduleDateTime || "-"}</td>
+        <td class="px-6 py-4 whitespace-nowrap">${record.scheduled_at || "-"}</td>
       </tr>
     `;
   });
