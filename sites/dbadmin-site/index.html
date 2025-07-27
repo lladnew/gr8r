@@ -1,32 +1,31 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <title>DB Admin Panel</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="./env.js"></script>
-  </head>
-  <body class="bg-gray-100 text-gray-900 font-sans">
-    <div class="max-w-6xl mx-auto px-4 py-8">
-      <h1 class="text-3xl font-bold mb-6">📋 DB1 Admin Panel</h1>
 
-      <div class="overflow-x-auto shadow-md rounded bg-white">
-        <table class="min-w-full divide-y divide-gray-200">
-          <thead class="bg-gray-50">
-            <tr>
-              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Title</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">R2 URL</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Schedule</th>
-            </tr>
-          </thead>
-          <tbody id="recordsTable" class="bg-white divide-y divide-gray-200">
-            <!-- Populated via JS -->
-          </tbody>
-        </table>
-      </div>
+<head>
+  <meta charset="UTF-8" />
+  <title>DB Admin Panel</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="./env.js"></script>
+</head>
+
+<body class="bg-gray-100 text-gray-900 font-sans">
+  <div class="max-w-6xl mx-auto px-4 py-8">
+    <h1 class="text-3xl font-bold mb-6">📋 DB1 Admin Panel</h1>
+
+    <div class="overflow-x-auto shadow-md rounded bg-white">
+      <table class="min-w-full divide-y divide-gray-200">
+        <thead id="recordsTableHead" class="bg-gray-50">
+          <!-- Headers will be inserted by JS -->
+        </thead>
+        <tbody id="recordsTable" class="bg-white divide-y divide-gray-200">
+          <!-- Rows will be inserted by JS -->
+        </tbody>
+      </table>
+
     </div>
+  </div>
 
-    <script src="./index.js"></script>
-  </body>
+  <script src="./index.js"></script>
+</body>
+
 </html>
