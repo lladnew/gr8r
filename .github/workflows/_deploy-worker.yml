@@ -1,4 +1,4 @@
-name: Reusable Worker Deployment
+name: Global Worker deploy
 
 on:
   workflow_call:

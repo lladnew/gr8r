@@ -1,4 +1,4 @@
-name: Deploy R2 Sign Worker
+name: Deploy r2Sign-worker
 
 on:
   push:

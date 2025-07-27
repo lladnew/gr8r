@@ -1,4 +1,4 @@
-name: Deploy Subscribe Site
+name: Deploy subscribe-site
 
 on:
   push:

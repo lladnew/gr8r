@@ -1,4 +1,4 @@
-name: Deploy subscribe Worker
+name: Deploy subscribe-worker
 
 on:
   push:
