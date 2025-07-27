@@ -15,3 +15,8 @@ service = "gr8r-grafana-worker"
 binding = "DB"
 database_name = "videos"
 database_id = "89df58ad-bb5e-4569-a4f0-a35b88a7f2d4"
+
+[[secrets_store_secrets]]
+binding = "ADMIN_TOKEN"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "ADMIN_TOKEN"

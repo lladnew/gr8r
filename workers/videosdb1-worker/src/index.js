@@ -1,5 +1,18 @@
+function isExternalRequest(request) {
+	const isFromWorker = request.headers.get("cf-worker") !== null;
+	const isInternalIP = request.headers.get("cf-connecting-ip")?.startsWith("127.");
+	return !(isFromWorker || isInternalIP);
+}
 export default {
 	async fetch(request, env, ctx) {
+
+		if (isExternalRequest(request)) {
+			const authHeader = request.headers.get("Authorization");
+			const expected = `Bearer ${await env.ADMIN_TOKEN.get()}`;
+			if (authHeader !== expected) {
+				return new Response("Unauthorized", { status: 401 });
+			}
+		}
 		const url = new URL(request.url);
 		// Handle POST /import to insert a new video
 		if (request.method === "POST" && url.pathname === "/import") {
