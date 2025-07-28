@@ -64,3 +64,5 @@ test-fetch.js
 .dev.vars
 #specific adds
 /pages/dbadmin/env.js
+.env.local
+

@@ -1,3 +1,22 @@
+// ADDED: CORS helper
+function getCorsHeaders(origin) {
+	const allowedOrigins = [
+		"https://admin.gr8r.com",
+		"http://localhost:5173",
+	];
+
+	const headers = {
+		"Access-Control-Allow-Headers": "Authorization, Content-Type",
+		"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+	};
+
+	if (origin && allowedOrigins.includes(origin)) {
+		headers["Access-Control-Allow-Origin"] = origin;
+	}
+
+	return headers;
+}
+
 function isExternalRequest(request) {
 	const isFromWorker = request.headers.get("cf-worker") !== null;
 	const isInternalIP = request.headers.get("cf-connecting-ip")?.startsWith("127.");
@@ -6,15 +25,11 @@ function isExternalRequest(request) {
 
 export default {
 	async fetch(request, env, ctx) {
-		// ADDED: Handle CORS preflight requests
+		// CHANGED: Handle CORS preflight requests dynamically
 		if (request.method === "OPTIONS") {
 			return new Response(null, {
 				status: 204,
-				headers: {
-					"Access-Control-Allow-Origin": "https://admin.gr8r.com",
-					"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-					"Access-Control-Allow-Headers": "Authorization, Content-Type",
-				},
+				headers: getCorsHeaders(request.headers.get("Origin")), // CHANGED
 			});
 		}
 
@@ -28,10 +43,8 @@ export default {
 
 		const url = new URL(request.url);
 
-		// Handle POST /import to insert a new video
 		if (request.method === "POST" && url.pathname === "/import") {
 			try {
-				// ✅ OPTIONAL: Only allow internal Cloudflare Worker calls
 				const cfConnectingIp = request.headers.get("cf-connecting-ip");
 				if (cfConnectingIp !== "127.0.0.1") {
 					return new Response("Forbidden", { status: 403 });
@@ -77,7 +90,6 @@ export default {
 
 				await stmt.run();
 
-				// ADDED: Grafana logging for successful import
 				await env.GRAFANA_WORKER.fetch("http://log", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
@@ -92,7 +104,6 @@ export default {
 				return new Response("Imported", { status: 200 });
 
 			} catch (err) {
-				// ADDED: Grafana logging for errors
 				await env.GRAFANA_WORKER.fetch("http://log", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
@@ -111,14 +122,13 @@ export default {
 		// Only handle GET /videos
 		if (request.method === "GET" && url.pathname === "/videos") {
 			try {
-				// CHANGED: Moved query vars *inside* try block for safe logging
 				const { searchParams } = url;
 				const status = searchParams.get("status");
 				const type = searchParams.get("type");
 
-				let query = "SELECT * FROM videos";        // CHANGED
-				let conditions = [];                       // CHANGED
-				let params = [];                           // CHANGED
+				let query = "SELECT * FROM videos";
+				let conditions = [];
+				let params = [];
 
 				if (status) {
 					conditions.push("status = ?");
@@ -137,17 +147,15 @@ export default {
 
 				const results = await env.DB.prepare(query).bind(...params).all();
 
+				// CHANGED: Apply dynamic CORS headers
 				return new Response(JSON.stringify(results.results, null, 2), {
 					headers: {
 						"Content-Type": "application/json",
-						"Access-Control-Allow-Origin": "https://admin.gr8r.com",
-						"Access-Control-Allow-Headers": "Authorization",
-						"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+						...getCorsHeaders(request.headers.get("Origin")), // CHANGED
 					},
 				});
 
 			} catch (err) {
-				// CHANGED: Removed logging of query/params to avoid ReferenceError
 				await env.GRAFANA_WORKER.fetch("http://log", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
@@ -162,12 +170,12 @@ export default {
 					}),
 				});
 
+				// CHANGED: Apply dynamic CORS headers on error
 				return new Response(`Error: ${err.message}`, {
 					status: 500,
 					headers: {
-						"Access-Control-Allow-Origin": "https://admin.gr8r.com",
-						"Access-Control-Allow-Headers": "Authorization",
-						"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+						"Content-Type": "text/plain",
+						...getCorsHeaders(request.headers.get("Origin")), // CHANGED
 					},
 				});
 			}
