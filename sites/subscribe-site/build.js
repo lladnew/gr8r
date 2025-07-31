@@ -20,7 +20,7 @@ fs.readdirSync(__dirname)
 // Copy assets folder if it exists
 const assetsDir = path.join(__dirname, "assets");
 if (fs.existsSync(assetsDir)) {
-  execSync(`xcopy "${assetsDir}" "${path.join(DIST, "assets")}" /E /I /Y`);
+  fs.cpSync(assetsDir, path.join(DIST, "assets"), { recursive: true });
 }
 
 console.log("✅ Build complete. Files copied to dist/");
