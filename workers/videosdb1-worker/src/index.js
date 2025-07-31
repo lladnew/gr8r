@@ -1,4 +1,4 @@
-//videosdb1-worker v1.0.1 - start of versioning more precisely in VS Code
+//videosdb1-worker v1.0.2 added CorsHeader response to 401 error
 function getCorsHeaders(origin) {
 	const allowedOrigins = [
 		"https://admin.gr8r.com",
@@ -56,7 +56,14 @@ export default {
 			const authHeader = request.headers.get("Authorization");
 			const expected = `Bearer ${await env.ADMIN_TOKEN.get()}`;
 			if (authHeader !== expected) {
-				return new Response("Unauthorized", { status: 401 });
+				return new Response("Unauthorized", {
+					status: 401,
+					headers: {
+						"Content-Type": "text/plain",
+						...getCorsHeaders(origin),
+					},
+					});
+
 			}
 		}
 
