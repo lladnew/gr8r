@@ -31,15 +31,17 @@ jobs:
       - name: Install Wrangler
         run: npm install -g wrangler@4.26.0
 
-      - name: Install dependencies (if package.json exists)
+         - name: Install & build if package.json exists
         working-directory: ${{ inputs.siteDirectory }}
-        if: exists('${{ inputs.siteDirectory }}/package.json')
-        run: npm install
+        run: |
+          if [ -f package.json ]; then
+            echo "Found package.json. Running build..."
+            npm install
+            npm run build
+          else
+            echo "No package.json found. Skipping build."
+          fi
 
-      - name: Build site (if package.json exists)
-        working-directory: ${{ inputs.siteDirectory }}
-        if: exists('${{ inputs.siteDirectory }}/package.json')
-        run: npm run build
 
       - name: Deploy to Pages
         run: |
