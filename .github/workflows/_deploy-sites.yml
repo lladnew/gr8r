@@ -6,6 +6,9 @@ on:
       siteDirectory:
         required: true
         type: string
+      buildDirectory:
+        required: false
+        type: string
       projectName:
         required: true
         type: string
@@ -32,12 +35,21 @@ jobs:
         run: npm install -g wrangler@4.26.0
 
       - name: Install & build if package.json exists
-        working-directory: ${{ inputs.siteDirectory }}/..
         run: |
+          BUILD_DIR="${{ inputs.buildDirectory }}"
+          if [ -z "$BUILD_DIR" ]; then
+            BUILD_DIR="${{ inputs.siteDirectory }}"
+          fi
+
+          echo "Working directory: $BUILD_DIR"
+          cd "$BUILD_DIR"
+
           if [ -f package.json ]; then
             echo "Found package.json. Running build..."
-            npm install
+            npm install || true
             npm run build
+            echo "--- Contents of dist/ after build ---"
+            ls -la dist || echo "dist not created"
           else
             echo "No package.json found. Skipping build."
           fi

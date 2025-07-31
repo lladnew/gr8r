@@ -11,6 +11,7 @@ jobs:
     uses: ./.github/workflows/_deploy-sites.yml
     with:
       siteDirectory: sites/subscribe-site/dist
+      buildDirectory: sites/subscribe-site
       projectName: gr8terthings-forms
     secrets:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
