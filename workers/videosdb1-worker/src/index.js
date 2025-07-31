@@ -35,6 +35,26 @@ function isExternalRequest(request) {
 export default {
 	async fetch(request, env, ctx) {
 	const origin = request.headers.get("Origin");
+		// TEMPORARY: Log all headers for debugging
+					const headersDump = {};
+					for (const [key, value] of request.headers.entries()) {
+					headersDump[key] = value;
+					}
+
+					await env.GRAFANA_WORKER.fetch("http://log", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						source: "gr8r-videosdb1-worker",
+						level: "debug",
+						message: "Full header dump for JWT debugging",
+						meta: {
+						method: request.method,
+						url: request.url,
+						headers: headersDump,
+						},
+					}),
+					});
 
 	await env.GRAFANA_WORKER.fetch("http://log", {
 		method: "POST",
