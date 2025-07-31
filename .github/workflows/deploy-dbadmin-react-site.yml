@@ -1,0 +1,16 @@
+name: Deploy dbadmin-react-site
+
+on:
+  push:
+    paths:
+      - 'sites/dbadmin-react-site/**'
+      - '.github/workflows/deploy-dbadmin-react-site.yml'
+
+jobs:
+  call-pages-deploy:
+    uses: ./.github/workflows/_deploy-sites.yml
+    with:
+      siteDirectory: sites/dbadmin-react-site/dist
+      projectName: dbadmin-react-site
+    secrets:
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
