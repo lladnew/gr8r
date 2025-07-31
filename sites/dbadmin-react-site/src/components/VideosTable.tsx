@@ -29,7 +29,7 @@ export default function VideosTable() {
 
   useEffect(() => {
     (async () => {
-      const res = await fetch('https://gr8r-videosdb1-worker.gr8r.workers.dev/videos', {
+      const res = await fetch('https://api.gr8r.com/videosdb1/videos', {
         headers: {
           Authorization: `Bearer ${import.meta.env.VITE_GR8R_ADMIN_TOKEN}`,
         },

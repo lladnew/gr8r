@@ -1,5 +1,5 @@
 (async function loadRecords() {
-  const API_URL = "https://gr8r-videosdb1-worker.gr8r.workers.dev"; // Adjust if needed
+  const API_URL = "https://api.gr8r.com/videosdb1/videos"; // Adjust if needed
 
   const res = await fetch(`${API_URL}/videos`, {
     headers: {
