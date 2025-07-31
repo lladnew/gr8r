@@ -4,7 +4,7 @@ function getCorsHeaders(origin) {
 		"https://admin.gr8r.com",
 		"https://test.admin.gr8r.com",
 		"http://localhost:5173",
-		"https://dbadmin-react-site.pages.dev/",
+		"https://dbadmin-react-site.pages.dev",
 
 	];
 
@@ -18,6 +18,12 @@ function getCorsHeaders(origin) {
 	}
 
 	return headers;
+}
+
+function base64urlToUint8Array(base64url) {
+  const base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(base64);
+  return Uint8Array.from(binary, (c) => c.charCodeAt(0));
 }
 
 function isExternalRequest(request) {
@@ -66,36 +72,74 @@ export default {
 //			}
 //		}
 
-if (isExternalRequest(request)) {
-  const jwt = request.headers.get("Cf-Access-Jwt-Assertion");
-  const cfVisitor = request.headers.get("cf-visitor");
+		if (isExternalRequest(request)) {
+		const jwt = request.headers.get("Cf-Access-Jwt-Assertion");
 
-  if (!jwt || !cfVisitor) {
-    return new Response("Unauthorized", {
-      status: 401,
-      headers: {
-        "Content-Type": "text/plain",
-        ...getCorsHeaders(origin),
-      },
-    });
-  }
+		if (!jwt) {
+			return new Response("Missing JWT", {
+			status: 401,
+			headers: {
+				"Content-Type": "text/plain",
+				...getCorsHeaders(origin),
+			},
+			});
+		}
 
-  const resp = await fetch("https://gr8r.cloudflareaccess.com/cdn-cgi/access/certs");
-  const { keys } = await resp.json();
+		const accessURL = "https://gr8r.cloudflareaccess.com"; // ← replace with your Access team domain if different
 
-  try {
-    const { payload } = await import('jsonwebtoken').then(mod => mod.default.verify(jwt, keys[0], { algorithms: ['RS256'] }));
-    // Optional: log or inspect payload.email, aud, etc.
-  } catch (err) {
-    return new Response("Invalid JWT", {
-      status: 401,
-      headers: {
-        "Content-Type": "text/plain",
-        ...getCorsHeaders(origin),
-      },
-    });
-  }
-}
+		const verifyResponse = await fetch(`${accessURL}/cdn-cgi/access/certs`);
+		const { keys } = await verifyResponse.json();
+			if (!keys || keys.length === 0) {
+			return new Response("Unable to validate JWT (no certs)", {
+				status: 401,
+				headers: {
+				"Content-Type": "text/plain",
+				...getCorsHeaders(origin),
+				},
+			});
+			}
+
+		const valid = await crypto.subtle
+			.importKey(
+			"jwk",
+			keys[0],
+			{
+				name: "RSASSA-PKCS1-v1_5",
+				hash: "SHA-256",
+			},
+			false,
+			["verify"]
+			)
+			.then((key) =>
+			crypto.subtle.verify(
+				"RSASSA-PKCS1-v1_5",
+				key,
+				base64urlToUint8Array(jwt.split(".")[2]),
+				new TextEncoder().encode(jwt.split(".")[0] + "." + jwt.split(".")[1])
+			)
+			);
+
+		if (!valid) {
+				await env.GRAFANA_WORKER.fetch("http://log", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					source: "gr8r-videosdb1-worker",
+					level: "warn",
+					message: "JWT verification failed",
+					meta: { origin, jwtStart: jwt?.slice(0, 15) }, // truncate for privacy
+				}),
+				});
+			return new Response("Invalid JWT", {
+			status: 401,
+			headers: {
+				"Content-Type": "text/plain",
+				...getCorsHeaders(origin),
+			},
+			});
+		}
+		}
+
 		const url = new URL(request.url);
 
 		if (request.method === "POST" && url.pathname === "/import") {
