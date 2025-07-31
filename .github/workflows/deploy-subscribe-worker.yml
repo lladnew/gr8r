@@ -5,7 +5,6 @@ on:
     paths:
       - 'workers/subscribe-worker/**'
       - '.github/workflows/deploy-subscribe-worker.yml'
-      - '.github/workflows/_deploy-worker.yml'   # ← Add this
 
 jobs:
   deploy:

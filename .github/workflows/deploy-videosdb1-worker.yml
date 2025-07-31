@@ -5,7 +5,6 @@ on:
     paths:
       - 'workers/videosdb1-worker/**'
       - '.github/workflows/videosdb1-worker.yml'
-      - '.github/workflows/_deploy-worker.yml'
       
 
 jobs:

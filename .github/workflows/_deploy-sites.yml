@@ -31,7 +31,7 @@ jobs:
       - name: Install Wrangler
         run: npm install -g wrangler@4.26.0
 
-         - name: Install & build if package.json exists
+      - name: Install & build if package.json exists
         working-directory: ${{ inputs.siteDirectory }}
         run: |
           if [ -f package.json ]; then

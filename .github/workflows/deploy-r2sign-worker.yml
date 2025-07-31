@@ -5,7 +5,6 @@ on:
     paths:
       - "workers/r2sign-worker/**"
       - ".github/workflows/deploy-r2sign-worker.yml"
-      - ".github/workflows/_deploy-worker.yml"
 
 jobs:
   deploy:
