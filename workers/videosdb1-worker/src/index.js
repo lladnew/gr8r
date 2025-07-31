@@ -1,4 +1,4 @@
-// ADDED: CORS helper
+//videosdb1-worker v1.0.1 - start of versioning more precisely in VS Code
 function getCorsHeaders(origin) {
 	const allowedOrigins = [
 		"https://admin.gr8r.com",
@@ -28,7 +28,23 @@ function isExternalRequest(request) {
 
 export default {
 	async fetch(request, env, ctx) {
-		// CHANGED: Handle CORS preflight requests dynamically
+	const origin = request.headers.get("Origin");
+
+	await env.GRAFANA_WORKER.fetch("http://log", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			source: "gr8r-videosdb1-worker",
+			level: "debug",
+			message: "Incoming request",
+			meta: {
+				origin,
+				method: request.method,
+				url: request.url,
+			},
+		}),
+	});
+		//Handle CORS preflight requests dynamically
 		if (request.method === "OPTIONS") {
 			return new Response(null, {
 				status: 204,
