@@ -1,4 +1,4 @@
-//videosdb1-worker v1.0.2 added CorsHeader response to 401 error
+//videosdb1-worker v1.0.3 removed secret and added Cf-Access-Jwt assertion and Pages
 function getCorsHeaders(origin) {
 	const allowedOrigins = [
 		"https://admin.gr8r.com",
@@ -51,22 +51,51 @@ export default {
 				headers: getCorsHeaders(request.headers.get("Origin")), // CHANGED
 			});
 		}
+//commenting out check for Bearer secret below - added new Cf-Access-Jwt assertion and Pages
+//		if (isExternalRequest(request)) {
+//			const authHeader = request.headers.get("Authorization");
+//			const expected = `Bearer ${await env.ADMIN_TOKEN.get()}`;
+//			if (authHeader !== expected) {
+//				return new Response("Unauthorized", {
+//					status: 401,
+//					headers: {
+//						"Content-Type": "text/plain",
+//						...getCorsHeaders(origin),
+//					},
+//					});
+//			}
+//		}
 
-		if (isExternalRequest(request)) {
-			const authHeader = request.headers.get("Authorization");
-			const expected = `Bearer ${await env.ADMIN_TOKEN.get()}`;
-			if (authHeader !== expected) {
-				return new Response("Unauthorized", {
-					status: 401,
-					headers: {
-						"Content-Type": "text/plain",
-						...getCorsHeaders(origin),
-					},
-					});
+if (isExternalRequest(request)) {
+  const jwt = request.headers.get("Cf-Access-Jwt-Assertion");
+  const cfVisitor = request.headers.get("cf-visitor");
 
-			}
-		}
+  if (!jwt || !cfVisitor) {
+    return new Response("Unauthorized", {
+      status: 401,
+      headers: {
+        "Content-Type": "text/plain",
+        ...getCorsHeaders(origin),
+      },
+    });
+  }
 
+  const resp = await fetch("https://gr8r.cloudflareaccess.com/cdn-cgi/access/certs");
+  const { keys } = await resp.json();
+
+  try {
+    const { payload } = await import('jsonwebtoken').then(mod => mod.default.verify(jwt, keys[0], { algorithms: ['RS256'] }));
+    // Optional: log or inspect payload.email, aud, etc.
+  } catch (err) {
+    return new Response("Invalid JWT", {
+      status: 401,
+      headers: {
+        "Content-Type": "text/plain",
+        ...getCorsHeaders(origin),
+      },
+    });
+  }
+}
 		const url = new URL(request.url);
 
 		if (request.method === "POST" && url.pathname === "/import") {
