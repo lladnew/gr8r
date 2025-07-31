@@ -1,15 +1,15 @@
 name = "gr8r-videosdb1-worker"
 main = "src/index.js"
 compatibility_date = "2025-07-25"
-
 account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
+workers_dev = false
+
+routes = [
+  { pattern  = "api.gr8r.com/videosdb1*", zone_name = "gr8r.com"}
+]
 
 [observability]
 enabled = true
-
-routes = [
-  "api.gr8r.com/videos*"
-]
 
 [[services]]
 binding = "GRAFANA_WORKER"
