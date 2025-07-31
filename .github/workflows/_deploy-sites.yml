@@ -31,11 +31,21 @@ jobs:
       - name: Install Wrangler
         run: npm install -g wrangler@4.26.0
 
+      - name: Install dependencies (if package.json exists)
+        working-directory: ${{ inputs.siteDirectory }}
+        if: exists('${{ inputs.siteDirectory }}/package.json')
+        run: npm install
+
+      - name: Build site (if package.json exists)
+        working-directory: ${{ inputs.siteDirectory }}
+        if: exists('${{ inputs.siteDirectory }}/package.json')
+        run: npm run build
+
       - name: Deploy to Pages
         run: |
           export CLOUDFLARE_API_TOKEN=${{ secrets.CF_API_TOKEN }}
           export CLOUDFLARE_ACCOUNT_ID=6a22f9b8ad27ffcc9719dd53a78bcedf
-          wrangler pages deploy ${{ inputs.siteDirectory }} --project-name=${{ inputs.projectName }}
+          wrangler pages deploy ${{ inputs.siteDirectory }}/dist --project-name=${{ inputs.projectName }}
 
       - name: Dump site directory (on failure)
         if: failure()
@@ -50,4 +60,5 @@ jobs:
         run: |
           echo "--- Wrangler Error Log ---"
           cat ~/.config/.wrangler/logs/*.log || echo "No logs found"
+
 
