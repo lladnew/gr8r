@@ -5,6 +5,7 @@ function getCorsHeaders(origin) {
 		"https://test.admin.gr8r.com",
 		"http://localhost:5173",
 		"https://dbadmin-react-site.pages.dev",
+		"https://api.gr8r.com",
 
 	];
 
@@ -41,7 +42,7 @@ export default {
 			headersDump[key] = value;
 		}
 
-		await env.GRAFANA_WORKER.fetch("http://log", {
+		await env.GRAFANA_WORKER.fetch("https://log", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
@@ -56,7 +57,7 @@ export default {
 			}),
 		});
 
-		await env.GRAFANA_WORKER.fetch("http://log", {
+		await env.GRAFANA_WORKER.fetch("https://log", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
@@ -91,17 +92,7 @@ export default {
 		//					});
 		//			}
 		//		}
-		// ADD: Temporary test route to verify Access callback
-		if (new URL(request.url).pathname === "/videosdb1/test") {
-			return new Response("Test OK", {
-				status: 200,
-				headers: {
-					"Content-Type": "text/plain",
-					...getCorsHeaders(origin),
-				},
-			});
-		}
-
+		
 		if (isExternalRequest(request)) {
 			const jwt = request.headers.get("Cf-Access-Jwt-Assertion");
 
@@ -150,7 +141,7 @@ export default {
 				);
 
 			if (!valid) {
-				await env.GRAFANA_WORKER.fetch("http://log", {
+				await env.GRAFANA_WORKER.fetch("https://log", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
@@ -219,7 +210,7 @@ export default {
 
 				await stmt.run();
 
-				await env.GRAFANA_WORKER.fetch("http://log", {
+				await env.GRAFANA_WORKER.fetch("https://log", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
@@ -233,7 +224,7 @@ export default {
 				return new Response("Imported", { status: 200 });
 
 			} catch (err) {
-				await env.GRAFANA_WORKER.fetch("http://log", {
+				await env.GRAFANA_WORKER.fetch("https://log", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
@@ -285,7 +276,7 @@ export default {
 				});
 
 			} catch (err) {
-				await env.GRAFANA_WORKER.fetch("http://log", {
+				await env.GRAFANA_WORKER.fetch("https://log", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
