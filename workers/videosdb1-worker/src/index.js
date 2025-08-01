@@ -1,11 +1,10 @@
-//videosdb1-worker v1.0.3 removed secret and added Cf-Access-Jwt assertion and Pages
+//gr8r/workers/videosdb1-worker v1.0.4 added JWT cert multi-check
 function getCorsHeaders(origin) {
 	const allowedOrigins = [
 		"https://admin.gr8r.com",
 		"https://test.admin.gr8r.com",
 		"http://localhost:5173",
 		"https://dbadmin-react-site.pages.dev",
-		"https://api.gr8r.com",
 
 	];
 
@@ -120,25 +119,36 @@ export default {
 				});
 			}
 
-			const valid = await crypto.subtle
-				.importKey(
+				let valid = false;
+
+				for (const jwk of keys) {
+				try {
+					const key = await crypto.subtle.importKey(
 					"jwk",
-					keys[0],
+					jwk,
 					{
 						name: "RSASSA-PKCS1-v1_5",
 						hash: "SHA-256",
 					},
 					false,
 					["verify"]
-				)
-				.then((key) =>
-					crypto.subtle.verify(
-						"RSASSA-PKCS1-v1_5",
-						key,
-						base64urlToUint8Array(jwt.split(".")[2]),
-						new TextEncoder().encode(jwt.split(".")[0] + "." + jwt.split(".")[1])
-					)
-				);
+					);
+
+					const isValid = await crypto.subtle.verify(
+					"RSASSA-PKCS1-v1_5",
+					key,
+					base64urlToUint8Array(jwt.split(".")[2]),
+					new TextEncoder().encode(jwt.split(".")[0] + "." + jwt.split(".")[1])
+					);
+
+					if (isValid) {
+					valid = true;
+					break;
+					}
+				} catch (err) {
+					// silently ignore bad certs
+				}
+				}
 
 			if (!valid) {
 				await env.GRAFANA_WORKER.fetch("https://log", {
@@ -146,7 +156,7 @@ export default {
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
 						source: "gr8r-videosdb1-worker",
-						level: "warn",
+						level: "error",
 						message: "JWT verification failed",
 						meta: { origin, jwtStart: jwt?.slice(0, 15) }, // truncate for privacy
 					}),
