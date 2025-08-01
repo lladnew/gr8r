@@ -1,3 +1,4 @@
+//dbadmin-react-site/src/components/VideosTable.tsx v1.0.1
 import React, { useEffect, useState } from 'react';
 import {
   useReactTable,
@@ -29,16 +30,9 @@ export default function VideosTable() {
 
   useEffect(() => {
     (async () => {
-      await fetch("https://api.gr8r.com/cdn-cgi/access/callback", {
-        credentials: "include",
-        mode: "cors",
-      });
+    
+      const res = await fetch('https://api.gr8r.com/videosdb1/videos');
 
-      const res = await fetch('https://api.gr8r.com/videosdb1/videos', {
-        headers: {
-          Authorization: `Bearer ${import.meta.env.VITE_GR8R_ADMIN_TOKEN}`,
-        },
-      });
       const records = await res.json();
       if (records.length) {
         setData(records);
