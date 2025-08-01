@@ -29,6 +29,11 @@ export default function VideosTable() {
 
   useEffect(() => {
     (async () => {
+      await fetch("https://api.gr8r.com/cdn-cgi/access/callback", {
+        credentials: "include",
+        mode: "cors",
+      });
+
       const res = await fetch('https://api.gr8r.com/videosdb1/videos', {
         headers: {
           Authorization: `Bearer ${import.meta.env.VITE_GR8R_ADMIN_TOKEN}`,
