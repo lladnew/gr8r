@@ -1,17 +1,16 @@
-name: deploy-dbadmin-react-site
+name: Deploy subscribe-site
 
 on:
   push:
     paths:
-      - "sites/dbadmin-react-site/**"
+      - 'sites/dbadmin-react-site/**'
+      - '.github/workflows/deploy-dbadmin-react-site.yml'
 
 jobs:
   deploy:
     uses: ./.github/workflows/_deploy-sites.yml
     with:
-      siteDirectory: sites/dbadmin-react-site
+      workingDirectory: sites/dbadmin-react-site
       projectName: dbadmin-react-site
-      workflowName: deploy-dbadmin-react-site
-      deployStatusKey: dbadmin-react-site
     secrets:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

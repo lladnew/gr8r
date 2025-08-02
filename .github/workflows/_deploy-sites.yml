@@ -3,7 +3,7 @@ name: Global Pages deploy
 on:
   workflow_call:
     inputs:
-      siteDirectory:
+      workingDirectory:
         required: true
         type: string
       buildDirectory:
