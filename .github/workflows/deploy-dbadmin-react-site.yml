@@ -12,9 +12,6 @@ jobs:
       siteDirectory: sites/dbadmin-react-site
       projectName: dbadmin-react-site
       workflowName: deploy-dbadmin-react-site
+      deployStatusKey: dbadmin-react-site
     secrets:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-workflow_call:
-  inputs:
-    projectName: dbadmin-react-site
-    deployStatusKey: dbadmin-react-site

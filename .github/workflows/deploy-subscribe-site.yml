@@ -12,6 +12,8 @@ jobs:
     with:
       siteDirectory:  sites/subscribe-site
       projectName: sites/subscribe-site
+      workflowName: deploy-subscribe-site
+      deployStatusKey: subscribe-site
     secrets:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
 workflow_call:
