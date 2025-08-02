@@ -33,6 +33,27 @@ jobs:
           echo "buildDirectory = ${{ inputs.buildDirectory }}"
           echo "projectName     = ${{ inputs.projectName }}"
 
+      - name: 🧪 Debug file paths
+        run: |
+          echo "GITHUB_WORKSPACE = $GITHUB_WORKSPACE"
+          BUILD_DIR="${{ inputs.buildDirectory }}"
+          if [ -z "$BUILD_DIR" ]; then
+            BUILD_DIR="${{ inputs.workingDirectory }}"
+          fi
+          echo "Resolved BUILD_DIR = $BUILD_DIR"
+
+          echo "--- 🗂️ ls -la from root ---"
+          ls -la
+
+          echo "--- 📁 ls -la sites/ ---"
+          ls -la sites || echo "❌ 'sites/' folder missing!"
+
+          echo "--- 📁 ls -la $BUILD_DIR ---"
+          ls -la "$BUILD_DIR" || echo "❌ BUILD_DIR path invalid!"
+
+          echo "--- 📄 Looking for package.json ---"
+          cat "$BUILD_DIR/package.json" || echo "❌ package.json not found!"
+
       - name: Install Wrangler
         run: npm install -g wrangler@4.26.0
 
@@ -67,4 +88,3 @@ jobs:
           ls -la "$BUILD_DIR/dist" || exit 1
 
           wrangler pages deploy "$BUILD_DIR/dist" --project-name=${{ inputs.projectName }} --commit-dirty=true
-
