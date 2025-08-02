@@ -12,6 +12,9 @@ on:
       projectName:
         required: true
         type: string
+      workflowName:
+        required: true
+        type: string
     secrets:
       CF_API_TOKEN:
         required: true
@@ -30,6 +33,7 @@ jobs:
           echo "Branch: ${{ github.ref }}"
           echo "Commit: ${{ github.sha }}"
           echo "Deploying site '${{ inputs.projectName }}' from '${{ inputs.siteDirectory }}'"
+          echo "Using workflow: '${{ inputs.workflowName }}'"
 
       - name: Install Wrangler
         run: npm install -g wrangler@4.26.0
@@ -54,7 +58,6 @@ jobs:
             echo "No package.json found. Skipping build."
           fi
 
-
       - name: Deploy to Pages
         run: |
           export CLOUDFLARE_API_TOKEN=${{ secrets.CF_API_TOKEN }}
@@ -75,4 +78,10 @@ jobs:
           echo "--- Wrangler Error Log ---"
           cat ~/.config/.wrangler/logs/*.log || echo "No logs found"
 
-
+      - name: Update DeployStatus.md
+        run: |
+          echo "# Deployment Status" > ${{ inputs.siteDirectory }}/DeployStatus.md
+          echo "" >> ${{ inputs.siteDirectory }}/DeployStatus.md
+          echo "![Deploy Status](https://github.com/lladnew/gr8r/actions/workflows/${{ inputs.workflowName }}.yml/badge.svg)" >> ${{ inputs.siteDirectory }}/DeployStatus.md
+          echo "" >> ${{ inputs.siteDirectory }}/DeployStatus.md
+          echo "_Last updated: $(date -u '+%Y-%m-%d %H:%M UTC')_" >> ${{ inputs.siteDirectory }}/DeployStatus.md

@@ -1,4 +1,4 @@
-## Deployment Status
+##Deployment Status for GR8R
 
 - 🛠️ [DB1 Worker](https://github.com/lladnew/gr8r/actions/workflows/deploy-db1-worker.yml)  
   [![Deploy DB1 Worker](https://github.com/lladnew/gr8r/actions/workflows/deploy-db1-worker.yml/badge.svg)](https://github.com/lladnew/gr8r/actions/workflows/deploy-db1-worker.yml)
