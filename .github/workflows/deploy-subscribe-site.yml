@@ -7,12 +7,14 @@ on:
       - '.github/workflows/deploy-subscribe-site.yml'
 
 jobs:
-  call-pages-deploy:
+  deploy:
     uses: ./.github/workflows/_deploy-sites.yml
     with:
-      siteDirectory: sites/subscribe-site
-      projectName: gr8terthings-forms
+      siteDirectory:  sites/subscribe-site
+      projectName: sites/subscribe-site
     secrets:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-
-
+workflow_call:
+  inputs:
+    projectName: gr8terthings-forms
+    deployStatusKey: subscribe-site
