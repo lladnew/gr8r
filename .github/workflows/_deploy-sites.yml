@@ -1,4 +1,4 @@
-name: Global Pages deploy
+nname: Global Pages deploy
 
 on:
   workflow_call:
@@ -13,6 +13,9 @@ on:
         required: true
         type: string
       workflowName:
+        required: true
+        type: string
+      deployStatusKey:
         required: true
         type: string
     secrets:
@@ -33,7 +36,6 @@ jobs:
           echo "Branch: ${{ github.ref }}"
           echo "Commit: ${{ github.sha }}"
           echo "Deploying site '${{ inputs.projectName }}' from '${{ inputs.siteDirectory }}'"
-          echo "Using workflow: '${{ inputs.workflowName }}'"
 
       - name: Install Wrangler
         run: npm install -g wrangler@4.26.0
@@ -78,22 +80,24 @@ jobs:
           echo "--- Wrangler Error Log ---"
           cat ~/.config/.wrangler/logs/*.log || echo "No logs found"
 
-      - name: Update DeployStatus.md
+      - name: Update DeployStatus.md timestamp
         run: |
-          echo "# Deployment Status" > ${{ inputs.siteDirectory }}/DeployStatus.md
-          echo "" >> ${{ inputs.siteDirectory }}/DeployStatus.md
-          echo "![Deploy Status](https://github.com/lladnew/gr8r/actions/workflows/${{ inputs.workflowName }}.yml/badge.svg)" >> ${{ inputs.siteDirectory }}/DeployStatus.md
-          echo "" >> ${{ inputs.siteDirectory }}/DeployStatus.md
-          echo "_Last updated: $(date -u '+%Y-%m-%d %H:%M UTC')_" >> ${{ inputs.siteDirectory }}/DeployStatus.md
-          
-      - name: Get current timestamp
-        id: ts
-        run: echo "LAST_DEPLOY=$(date -u '+%Y-%m-%d %H:%M UTC')" >> $GITHUB_ENV
+          FILE=DeployStatus.md
+          KEY="${{ inputs.deployStatusKey }}"
+          TIME="$(date -u '+%Y-%m-%d %H:%M UTC')"
+          awk -v key="$KEY" -v time="$TIME" '
+            BEGIN { start="<!-- START:" key "-->", end="<!-- END:" key "-->", found=0 }
+            {
+              if ($0 ~ start) { print; print "  _Last deployed: " time "_"; found=1; next }
+              if ($0 ~ end) { found=0 }
+              if (!found) print
+            }
+          ' "$FILE" > "$FILE.tmp" && mv "$FILE.tmp" "$FILE"
 
-      - name: Update DeployStatus.md
+      - name: Commit updated DeployStatus.md
         run: |
-          echo "# Deployment Status" > ${{ inputs.siteDirectory }}/DeployStatus.md
-          echo "" >> ${{ inputs.siteDirectory }}/DeployStatus.md
-          echo "![Deploy Status](https://github.com/lladnew/gr8r/actions/workflows/${{ inputs.workflowName }}.yml/badge.svg)" >> ${{ inputs.siteDirectory }}/DeployStatus.md
-          echo "" >> ${{ inputs.siteDirectory }}/DeployStatus.md
-          echo "_Last updated: $LAST_DEPLOY_" >> ${{ inputs.siteDirectory }}/DeployStatus.md
+          git config user.name "lladnew"
+          git config user.email "lladnew@users.noreply.github.com"
+          git add DeployStatus.md
+          git commit -m "🟢 Update deploy timestamp for ${{ inputs.deployStatusKey }}"
+          git push
