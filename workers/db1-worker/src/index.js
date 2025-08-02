@@ -173,7 +173,7 @@ export default {
 
 		const url = new URL(request.url);
 
-		if (request.method === "POST" && url.pathname === "db1/import") {
+		if (request.method === "POST" && url.pathname === "/db1/import") {
 			try {
 				const cfConnectingIp = request.headers.get("cf-connecting-ip");
 				if (cfConnectingIp !== "127.0.0.1") {
@@ -250,7 +250,7 @@ export default {
 		}
 
 		// Only handle GET /videos
-		if (request.method === "GET" && url.pathname === "db1/videos") {
+		if (request.method === "GET" && url.pathname === "/db1/videos") {
 			try {
 				const { searchParams } = url;
 				const status = searchParams.get("status");
