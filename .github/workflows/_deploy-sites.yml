@@ -29,47 +29,45 @@ jobs:
         run: |
           echo "Branch: ${{ github.ref }}"
           echo "Commit: ${{ github.sha }}"
-          echo "Deploying site '${{ inputs.projectName }}' from '${{ inputs.workingDirectory }}'"
+          echo "Deploying '${{ inputs.projectName }}' from workingDirectory='${{ inputs.workingDirectory }}'"
 
       - name: Install Wrangler
         run: npm install -g wrangler@4.26.0
 
-      - name: Install & build if package.json exists
+      - name: Install dependencies & build
         run: |
           BUILD_DIR="${{ inputs.buildDirectory }}"
           if [ -z "$BUILD_DIR" ]; then
             BUILD_DIR="${{ inputs.workingDirectory }}"
           fi
 
-          echo "Working directory: $BUILD_DIR"
+          echo "💡 BUILD_DIR resolved to: $BUILD_DIR"
           cd "$BUILD_DIR"
 
           if [ -f package.json ]; then
-            echo "Found package.json. Running build..."
+            echo "📦 Running npm install and build..."
             npm install || true
             npm run build
-            echo "--- Contents of dist/ after build ---"
-            ls -la dist || echo "dist not created"
           else
-            echo "No package.json found. Skipping build."
+            echo "⚠️ No package.json found in $BUILD_DIR. Skipping build."
           fi
-
 
       - name: Deploy to Pages
         run: |
           export CLOUDFLARE_API_TOKEN=${{ secrets.CF_API_TOKEN }}
           export CLOUDFLARE_ACCOUNT_ID=6a22f9b8ad27ffcc9719dd53a78bcedf
-          wrangler pages deploy ${{ inputs.workingDirectory }}/dist --project-name=${{ inputs.projectName }} --commit-dirty=true
 
-      - name: Dump site directory (on failure)
-        if: failure()
-        run: |
-          echo "Contents of ${{ inputs.workingDirectory }}:"
-          ls -la ${{ inputs.siteDirectory }}
-          echo "--- index.html ---"
-          cat ${{ inputs.workingDirectory }}/index.html || echo "Missing index.html"
+          BUILD_DIR="${{ inputs.buildDirectory }}"
+          if [ -z "$BUILD_DIR" ]; then
+            BUILD_DIR="${{ inputs.workingDirectory }}"
+          fi
 
-      - name: Output Wrangler error log (on failure)
+          echo "📁 Deploying from: $BUILD_DIR/dist"
+          ls -la "$BUILD_DIR/dist" || echo "⚠️ dist folder not found!"
+
+          wrangler pages deploy "$BUILD_DIR/dist" --project-name=${{ inputs.projectName }} --commit-dirty=true
+
+      - name: Output Wrangler logs (on failure)
         if: failure()
         run: |
           echo "--- Wrangler Error Log ---"
