@@ -1,16 +1,26 @@
-##Deployment Status for GR8R
+# Deployment Status
 
-- 🛠️ [DB1 Worker](https://github.com/lladnew/gr8r/actions/workflows/deploy-db1-worker.yml)  
-  [![Deploy DB1 Worker](https://github.com/lladnew/gr8r/actions/workflows/deploy-db1-worker.yml/badge.svg)](https://github.com/lladnew/gr8r/actions/workflows/deploy-db1-worker.yml)
+<!-- START:dbadmin-react-site -->
+![Deploy Status](https://github.com/lladnew/gr8r/actions/workflows/deploy-dbadmin-react-site.yml/badge.svg)
+_Last deployed: Never_
+<!-- END:dbadmin-react-site -->
 
-- 🛠️ [R2Sign Worker](https://github.com/lladnew/gr8r/actions/workflows/deploy-r2sign-worker.yml)  
-  [![Deploy R2Sign Worker](https://github.com/lladnew/gr8r/actions/workflows/deploy-r2sign-worker.yml/badge.svg)](https://github.com/lladnew/gr8r/actions/workflows/deploy-r2sign-worker.yml)
+<!-- START:subscribe-site -->
+![Deploy Status](https://github.com/lladnew/gr8r/actions/workflows/deploy-subscribe-site.yml/badge.svg)
+_Last deployed: Never_
+<!-- END:subscribe-site -->
 
-- 🛠️ [Subscribe Worker](https://github.com/lladnew/gr8r/actions/workflows/deploy-subscribe-worker.yml)  
-  [![Deploy Subscribe Worker](https://github.com/lladnew/gr8r/actions/workflows/deploy-subscribe-worker.yml/badge.svg)](https://github.com/lladnew/gr8r/actions/workflows/deploy-subscribe-worker.yml)
+<!-- START:videosdb1-worker -->
+![Deploy Status](https://github.com/lladnew/gr8r/actions/workflows/deploy-videosdb1-worker.yml/badge.svg)
+_Last deployed: Never_
+<!-- END:videosdb1-worker -->
 
-- 🌐 [DB Admin React Site](https://github.com/lladnew/gr8r/actions/workflows/deploy-dbadmin-react-site.yml)  
-  [![Deploy DB Admin React Site](https://github.com/lladnew/gr8r/actions/workflows/deploy-dbadmin-react-site.yml/badge.svg)](https://github.com/lladnew/gr8r/actions/workflows/deploy-dbadmin-react-site.yml)
+<!-- START:r2sign-worker -->
+![Deploy Status](https://github.com/lladnew/gr8r/actions/workflows/deploy-r2sign-worker.yml/badge.svg)
+_Last deployed: Never_
+<!-- END:r2sign-worker -->
 
-- 🌐 [Subscribe Site](https://github.com/lladnew/gr8r/actions/workflows/deploy-subscribe-site.yml)  
-  [![Deploy Subscribe Site](https://github.com/lladnew/gr8r/actions/workflows/deploy-subscribe-site.yml/badge.svg)](https://github.com/lladnew/gr8r/actions/workflows/deploy-subscribe-site.yml)
+<!-- START:subscribe-worker -->
+![Deploy Status](https://github.com/lladnew/gr8r/actions/workflows/deploy-subscribe-worker.yml/badge.svg)
+_Last deployed: Never_
+<!-- END:subscribe-worker -->
