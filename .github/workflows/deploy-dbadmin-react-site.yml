@@ -1,4 +1,4 @@
-name: Deploy subscribe-site
+name: Deploy dbadmin-react-site
 
 on:
   push:

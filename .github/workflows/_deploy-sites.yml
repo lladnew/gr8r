@@ -29,30 +29,31 @@ jobs:
         run: |
           echo "Branch: ${{ github.ref }}"
           echo "Commit: ${{ github.sha }}"
-          echo "Deploying '${{ inputs.projectName }}' from workingDirectory='${{ inputs.workingDirectory }}'"
+          echo "workingDirectory = ${{ inputs.workingDirectory }}"
+          echo "buildDirectory = ${{ inputs.buildDirectory }}"
+          echo "projectName     = ${{ inputs.projectName }}"
 
       - name: Install Wrangler
         run: npm install -g wrangler@4.26.0
 
-      - name: Install dependencies & build
+      - name: Build site
         run: |
           BUILD_DIR="${{ inputs.buildDirectory }}"
           if [ -z "$BUILD_DIR" ]; then
             BUILD_DIR="${{ inputs.workingDirectory }}"
           fi
 
-          echo "💡 BUILD_DIR resolved to: $BUILD_DIR"
+          echo "📦 Building site in: $BUILD_DIR"
           cd "$BUILD_DIR"
 
           if [ -f package.json ]; then
-            echo "📦 Running npm install and build..."
             npm install || true
             npm run build
           else
             echo "⚠️ No package.json found in $BUILD_DIR. Skipping build."
           fi
 
-      - name: Deploy to Pages
+      - name: Deploy to Cloudflare Pages
         run: |
           export CLOUDFLARE_API_TOKEN=${{ secrets.CF_API_TOKEN }}
           export CLOUDFLARE_ACCOUNT_ID=6a22f9b8ad27ffcc9719dd53a78bcedf
@@ -62,13 +63,8 @@ jobs:
             BUILD_DIR="${{ inputs.workingDirectory }}"
           fi
 
-          echo "📁 Deploying from: $BUILD_DIR/dist"
-          ls -la "$BUILD_DIR/dist" || echo "⚠️ dist folder not found!"
+          echo "📁 Final dist path: $BUILD_DIR/dist"
+          ls -la "$BUILD_DIR/dist" || exit 1
 
           wrangler pages deploy "$BUILD_DIR/dist" --project-name=${{ inputs.projectName }} --commit-dirty=true
 
-      - name: Output Wrangler logs (on failure)
-        if: failure()
-        run: |
-          echo "--- Wrangler Error Log ---"
-          cat ~/.config/.wrangler/logs/*.log || echo "No logs found"
