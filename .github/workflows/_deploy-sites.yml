@@ -1,4 +1,4 @@
-nname: Global Pages deploy
+name: Global Pages deploy
 
 on:
   workflow_call:
