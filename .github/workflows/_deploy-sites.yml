@@ -29,7 +29,7 @@ jobs:
         run: |
           echo "Branch: ${{ github.ref }}"
           echo "Commit: ${{ github.sha }}"
-          echo "Deploying site '${{ inputs.projectName }}' from '${{ inputs.siteDirectory }}'"
+          echo "Deploying site '${{ inputs.projectName }}' from '${{ inputs.workingDirectory }}'"
 
       - name: Install Wrangler
         run: npm install -g wrangler@4.26.0
@@ -38,7 +38,7 @@ jobs:
         run: |
           BUILD_DIR="${{ inputs.buildDirectory }}"
           if [ -z "$BUILD_DIR" ]; then
-            BUILD_DIR="${{ inputs.siteDirectory }}"
+            BUILD_DIR="${{ inputs.workingDirectory }}"
           fi
 
           echo "Working directory: $BUILD_DIR"
