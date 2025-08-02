@@ -99,8 +99,15 @@ jobs:
                 found=1
                 next
               }
-              if ($0 ~ end) { found=0 }
-              if (!found) print
+              if ($0 ~ end) {
+                print
+                found=0
+                next
+              }
+              if (found) {
+                if ($0 !~ /^_Last deployed:/) next
+              }
+              print
             }
           ' "$FILE" > "$FILE.tmp" && mv "$FILE.tmp" "$FILE"
 
