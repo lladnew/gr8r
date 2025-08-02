@@ -1,11 +1,9 @@
-
--- Generated 2025-07-25T19:15:11.821727 UTC
 CREATE TABLE videos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'Hold',
+  title TEXT UNIQUE,
+  status TEXT,
   video_type TEXT,
-  scheduled_at DATETIME,
+  scheduled_at DATETIME,         -- CHANGED from TEXT
   r2_url TEXT,
   r2_transcript_url TEXT,
   video_filename TEXT,
@@ -17,6 +15,6 @@ CREATE TABLE videos (
   social_copy_body TEXT,
   social_copy_cta TEXT,
   hashtags TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME
+  record_created DATETIME,       -- CHANGED from TEXT
+  record_modified DATETIME       -- CHANGED from TEXT
 );

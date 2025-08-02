@@ -1,4 +1,4 @@
-//gr8r/workers/db1-worker v1.0.5 changed line 
+//gr8r/workers/db1-worker v1.0.6 modified POST to UPSERT and included record change timestamps
 function getCorsHeaders(origin) {
 	const allowedOrigins = [
 		"https://admin.gr8r.com",
@@ -173,80 +173,92 @@ export default {
 
 		const url = new URL(request.url);
 
-		if (request.method === "POST" && url.pathname === "/db1/import") {
-			try {
-				const cfConnectingIp = request.headers.get("cf-connecting-ip");
-				if (cfConnectingIp !== "127.0.0.1") {
-					return new Response("Forbidden", { status: 403 });
-				}
+// new UPSERT code includes time/date stamping for record_created and/or record_modified
 
-				const body = await request.json();
+		if (request.method === "POST" && url.pathname === "/db1/videos") {
+		try {
+			const body = await request.json();
 
-				const {
-					title,
-					status,
-					video_type,
-					scheduled_at,
-					r2_url,
-					r2_transcript_url,
-					video_filename,
-					content_type,
-					file_size_bytes,
-					transcript_id,
-					planly_media_id,
-					social_copy_hook,
-					social_copy_body,
-					social_copy_cta,
-					hashtags,
-					record_created,
-					record_modified
-				} = body;
+			const {
+			title,
+			status,
+			video_type,
+			scheduled_at,
+			r2_url,
+			r2_transcript_url,
+			video_filename,
+			content_type,
+			file_size_bytes,
+			transcript_id,
+			planly_media_id,
+			social_copy_hook,
+			social_copy_body,
+			social_copy_cta,
+			hashtags
+			} = body;
 
-				const stmt = env.DB.prepare(`
-      INSERT INTO videos (
-        title, status, video_type, scheduled_at, r2_url, r2_transcript_url,
-        video_filename, content_type, file_size_bytes, transcript_id,
-        planly_media_id, social_copy_hook, social_copy_body, social_copy_cta,
-        hashtags, record_created, record_modified
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(title) DO NOTHING
-    `).bind(
-					title, status, video_type, scheduled_at, r2_url, r2_transcript_url,
-					video_filename, content_type, file_size_bytes, transcript_id,
-					planly_media_id, social_copy_hook, social_copy_body, social_copy_cta,
-					hashtags, record_created, record_modified
-				);
+			const now = new Date().toISOString();
 
-				await stmt.run();
+			const stmt = env.DB.prepare(`
+			INSERT INTO videos (
+				title, status, video_type, scheduled_at, r2_url, r2_transcript_url,
+				video_filename, content_type, file_size_bytes, transcript_id,
+				planly_media_id, social_copy_hook, social_copy_body, social_copy_cta,
+				hashtags, record_created, record_modified
+			)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(title) DO UPDATE SET
+				status = excluded.status,
+				video_type = excluded.video_type,
+				scheduled_at = excluded.scheduled_at,
+				r2_url = excluded.r2_url,
+				r2_transcript_url = excluded.r2_transcript_url,
+				video_filename = excluded.video_filename,
+				content_type = excluded.content_type,
+				file_size_bytes = excluded.file_size_bytes,
+				transcript_id = excluded.transcript_id,
+				planly_media_id = excluded.planly_media_id,
+				social_copy_hook = excluded.social_copy_hook,
+				social_copy_body = excluded.social_copy_body,
+				social_copy_cta = excluded.social_copy_cta,
+				hashtags = excluded.hashtags,
+				record_modified = ?
+			`).bind(
+			title, status, video_type, scheduled_at, r2_url, r2_transcript_url,
+			video_filename, content_type, file_size_bytes, transcript_id,
+			planly_media_id, social_copy_hook, social_copy_body, social_copy_cta,
+			hashtags, now, now // for VALUES clause (created + modified)
+			).bind(now); // second bind: for UPDATE clause (modified)
 
-				await env.GRAFANA_WORKER.fetch("https://log", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						source: "gr8r-db1-worker",
-						level: "info",
-						message: "Imported video",
-						meta: { title, scheduled_at, video_type }
-					}),
-				});
+			await stmt.run();
 
-				return new Response("Imported", { status: 200 });
+			await env.GRAFANA_WORKER.fetch("https://log", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				source: "gr8r-db1-worker",
+				level: "info",
+				message: "Upserted video",
+				meta: { title, scheduled_at, video_type }
+			}),
+			});
 
-			} catch (err) {
-				await env.GRAFANA_WORKER.fetch("https://log", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						source: "gr8r-db1-worker",
-						level: "error",
-						message: "Failed to import video",
-						meta: { error: err.message, title }
-					}),
-				});
+			return new Response("Upserted", { status: 200 });
 
-				return new Response("Import Error: " + err.message, { status: 400 });
-			}
+		} catch (err) {
+			await env.GRAFANA_WORKER.fetch("https://log", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				source: "gr8r-db1-worker",
+				level: "error",
+				message: "Failed to upsert video",
+				meta: { error: err.message }
+			}),
+			});
+
+			return new Response("Upsert Error: " + err.message, { status: 400 });
+		}
 		}
 
 		// Only handle GET /videos

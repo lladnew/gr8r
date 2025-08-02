@@ -19,8 +19,8 @@ service = "gr8r-grafana-worker"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "videos"
-database_id = "89df58ad-bb5e-4569-a4f0-a35b88a7f2d4"
+database_name = "DB1"
+database_id = "287776a7-cce2-4171-a7c0-e8a5279dc4b0"
 
 [[secrets_store_secrets]]
 binding = "ADMIN_TOKEN"

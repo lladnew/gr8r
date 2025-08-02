@@ -1,0 +1,14 @@
+ ⛅️ wrangler 4.24.3 (update available 4.27.0)
+─────────────────────────────────────────────
+✅ Successfully created DB 'DB1' in region ENAM
+Created your new D1 database.
+
+{
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "DB1",
+      "database_id": "287776a7-cce2-4171-a7c0-e8a5279dc4b0"
+    }
+  ]
+}
