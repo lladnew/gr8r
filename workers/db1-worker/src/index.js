@@ -1,4 +1,4 @@
-//gr8r/workers/videosdb1-worker v1.0.4 added JWT cert multi-check
+//gr8r/workers/db1-worker v1.0.4 added JWT cert multi-check
 function getCorsHeaders(origin) {
 	const allowedOrigins = [
 		"https://admin.gr8r.com",
@@ -45,7 +45,7 @@ export default {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
-				source: "gr8r-videosdb1-worker",
+				source: "gr8r-db1-worker",
 				level: "debug",
 				message: "Full header dump for JWT debugging",
 				meta: {
@@ -60,7 +60,7 @@ export default {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
-				source: "gr8r-videosdb1-worker",
+				source: "gr8r-db1-worker",
 				level: "debug",
 				message: "Incoming request",
 				meta: {
@@ -155,7 +155,7 @@ export default {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
-						source: "gr8r-videosdb1-worker",
+						source: "gr8r-db1-worker",
 						level: "error",
 						message: "JWT verification failed",
 						meta: { origin, jwtStart: jwt?.slice(0, 15) }, // truncate for privacy
@@ -224,7 +224,7 @@ export default {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
-						source: "gr8r-videosdb1-worker",
+						source: "gr8r-db1-worker",
 						level: "info",
 						message: "Imported video",
 						meta: { title, scheduled_at, video_type }
@@ -238,7 +238,7 @@ export default {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
-						source: "gr8r-videosdb1-worker",
+						source: "gr8r-db1-worker",
 						level: "error",
 						message: "Failed to import video",
 						meta: { error: err.message, title }
@@ -290,7 +290,7 @@ export default {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
-						source: "gr8r-videosdb1-worker",
+						source: "gr8r-db1-worker",
 						level: "error",
 						message: "GET /videos failed",
 						meta: {

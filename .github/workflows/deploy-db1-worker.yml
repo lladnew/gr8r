@@ -1,0 +1,17 @@
+name: Deploy db1 Worker
+
+on:
+  push:
+    paths:
+      - 'workers/db1-worker/**'
+      - '.github/workflows/db1-worker.yml'
+      
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_deploy-worker.yml
+    with:
+      workingDirectory: workers/b1-worker
+      workerName: db1-worker
+    secrets:
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

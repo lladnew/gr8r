@@ -1,8 +1,0 @@
-name = "admin-gr8r"
-compatibility_date = "2024-07-27" # Or today’s date
-
-[build]
-command = ""
-cwd = "./"
-upload_format = "directory"
-upload_dir = "."

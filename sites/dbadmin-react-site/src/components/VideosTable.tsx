@@ -31,7 +31,7 @@ export default function VideosTable() {
   useEffect(() => {
     (async () => {
     
-      const res = await fetch('https://admin.gr8r.com/videosdb1/videos');
+      const res = await fetch('https://admin.gr8r.com/db1/videos');
 
       const records = await res.json();
       if (records.length) {
