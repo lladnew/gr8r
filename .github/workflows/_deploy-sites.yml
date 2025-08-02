@@ -12,12 +12,6 @@ on:
       projectName:
         required: true
         type: string
-      workflowName:
-        required: true
-        type: string
-      deployStatusKey:
-        required: true
-        type: string
     secrets:
       CF_API_TOKEN:
         required: true
@@ -79,48 +73,12 @@ jobs:
         run: |
           echo "--- Wrangler Error Log ---"
           cat ~/.config/.wrangler/logs/*.log || echo "No logs found"
-
-      - name: Update DeployStatus.md timestamp
+      - name: Update DeployStatus.md
         run: |
-          FILE=DeployStatus.md
-          KEY="${{ inputs.deployStatusKey }}"
-          TIME="$(date -u '+%Y-%m-%d %H:%M UTC')"
+        echo "# Deployment Status" > ${{ inputs.site-directory }}/DeployStatus.md
+        echo "" >> ${{ inputs.site-directory }}/DeployStatus.md
+        echo "![Deploy Status](https://github.com/lladnew/gr8r/actions/workflows/deploy-${{ inputs.workflow-name }}.yml/badge.svg)" >> ${{ inputs.site-directory }}/DeployStatus.md
+        echo "" >> ${{ inputs.site-directory }}/DeployStatus.md
+        echo "_Last updated: $(date -u '+%Y-%m-%d %H:%M UTC')_" >> ${{ inputs.site-directory }}/DeployStatus.md
 
-          awk -v key="$KEY" -v time="$TIME" '
-            BEGIN {
-              start="<!-- START:" key "-->"
-              end="<!-- END:" key "-->"
-              found=0
-            }
-            {
-              if ($0 ~ start) {
-                print
-                print "_Last deployed: " time "_"
-                found=1
-                next
-              }
-              if ($0 ~ end) {
-                print
-                found=0
-                next
-              }
-              if (found) {
-                if ($0 !~ /^_Last deployed:/) next
-              }
-              print
-            }
-          ' "$FILE" > "$FILE.tmp" && mv "$FILE.tmp" "$FILE"
-
-      - name: Commit updated DeployStatus.md (if changed)
-        run: |
-          git config user.name "lladnew"
-          git config user.email "lladnew@users.noreply.github.com"
-
-          if ! git diff --quiet DeployStatus.md; then
-            git add DeployStatus.md
-            git commit -m "🟢 Update deploy timestamp for ${{ inputs.deployStatusKey }}"
-            git push
-          else
-            echo "No changes to DeployStatus.md; skipping commit."
-          fi
 
