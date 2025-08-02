@@ -1,4 +1,4 @@
-//gr8r/workers/db1-worker v1.0.4 added JWT cert multi-check
+//gr8r/workers/db1-worker v1.0.5 changed line 
 function getCorsHeaders(origin) {
 	const allowedOrigins = [
 		"https://admin.gr8r.com",
@@ -173,7 +173,7 @@ export default {
 
 		const url = new URL(request.url);
 
-		if (request.method === "POST" && url.pathname === "/import") {
+		if (request.method === "POST" && url.pathname === "db1/import") {
 			try {
 				const cfConnectingIp = request.headers.get("cf-connecting-ip");
 				if (cfConnectingIp !== "127.0.0.1") {
@@ -250,7 +250,7 @@ export default {
 		}
 
 		// Only handle GET /videos
-		if (request.method === "GET" && url.pathname === "/videos") {
+		if (request.method === "GET" && url.pathname === "db1/videos") {
 			try {
 				const { searchParams } = url;
 				const status = searchParams.get("status");
