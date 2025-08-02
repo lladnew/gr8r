@@ -85,3 +85,15 @@ jobs:
           echo "![Deploy Status](https://github.com/lladnew/gr8r/actions/workflows/${{ inputs.workflowName }}.yml/badge.svg)" >> ${{ inputs.siteDirectory }}/DeployStatus.md
           echo "" >> ${{ inputs.siteDirectory }}/DeployStatus.md
           echo "_Last updated: $(date -u '+%Y-%m-%d %H:%M UTC')_" >> ${{ inputs.siteDirectory }}/DeployStatus.md
+          
+      - name: Get current timestamp
+        id: ts
+        run: echo "LAST_DEPLOY=$(date -u '+%Y-%m-%d %H:%M UTC')" >> $GITHUB_ENV
+
+      - name: Update DeployStatus.md
+        run: |
+          echo "# Deployment Status" > ${{ inputs.siteDirectory }}/DeployStatus.md
+          echo "" >> ${{ inputs.siteDirectory }}/DeployStatus.md
+          echo "![Deploy Status](https://github.com/lladnew/gr8r/actions/workflows/${{ inputs.workflowName }}.yml/badge.svg)" >> ${{ inputs.siteDirectory }}/DeployStatus.md
+          echo "" >> ${{ inputs.siteDirectory }}/DeployStatus.md
+          echo "_Last updated: $LAST_DEPLOY_" >> ${{ inputs.siteDirectory }}/DeployStatus.md
