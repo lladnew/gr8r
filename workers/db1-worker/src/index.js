@@ -26,11 +26,14 @@ function base64urlToUint8Array(base64url) {
 	return Uint8Array.from(binary, (c) => c.charCodeAt(0));
 }
 
-function isExternalRequest(request) {
-	const isFromWorker = request.headers.get("cf-worker") !== null;
-	const isInternalIP = request.headers.get("cf-connecting-ip")?.startsWith("127.");
-	return !(isFromWorker || isInternalIP);
-}
+	// Allowlist of trusted internal workers
+	const ALLOWED_INTERNAL_WORKERS = ["gr8r-videouploads-worker"];
+
+	// Determine if request is from an internal Worker via cf-worker header
+	function isInternalRequest(request) {
+		const cfWorker = request.headers.get("cf-worker");
+		return ALLOWED_INTERNAL_WORKERS.includes(cfWorker);
+	}
 
 export default {
 	async fetch(request, env, ctx) {
@@ -92,88 +95,101 @@ export default {
 		//			}
 		//		}
 		
-		if (!isExternalRequest(request)) {
-		// ✅ Allow internal requests without JWT
-		// No-op; continue into route handlers
-		} else {
-			// 🔒 JWT required for external requests
-			const jwt = request.headers.get("Cf-Access-Jwt-Assertion");
+		const isInternal = isInternalRequest(request);
 
-			if (!jwt) {
-				return new Response("Missing JWT", {
-					status: 401,
-					headers: {
-						"Content-Type": "text/plain",
-						...getCorsHeaders(origin),
-					},
-				});
+		await env.GRAFANA_WORKER.fetch("https://log", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			source: "gr8r-db1-worker",
+			level: "debug",
+			message: "Caller identity check",
+			meta: {
+			cf_worker: request.headers.get("cf-worker"),
+			internal: isInternal,
+			},
+		}),
+		});
+
+		if (!isInternal) {
+		// 🔒 JWT required for external requests
+		const jwt = request.headers.get("Cf-Access-Jwt-Assertion");
+
+		if (!jwt) {
+			return new Response("Missing JWT", {
+			status: 401,
+			headers: {
+				"Content-Type": "text/plain",
+				...getCorsHeaders(origin),
+			},
+			});
+		}
+
+		const accessURL = "https://gr8r.cloudflareaccess.com";
+		const verifyResponse = await fetch(`${accessURL}/cdn-cgi/access/certs`);
+		const { keys } = await verifyResponse.json();
+
+		if (!keys || keys.length === 0) {
+			return new Response("Unable to validate JWT (no certs)", {
+			status: 401,
+			headers: {
+				"Content-Type": "text/plain",
+				...getCorsHeaders(origin),
+			},
+			});
+		}
+
+		let valid = false;
+
+		for (const jwk of keys) {
+			try {
+			const key = await crypto.subtle.importKey(
+				"jwk",
+				jwk,
+				{
+				name: "RSASSA-PKCS1-v1_5",
+				hash: "SHA-256",
+				},
+				false,
+				["verify"]
+			);
+
+			const isValid = await crypto.subtle.verify(
+				"RSASSA-PKCS1-v1_5",
+				key,
+				base64urlToUint8Array(jwt.split(".")[2]),
+				new TextEncoder().encode(jwt.split(".")[0] + "." + jwt.split(".")[1])
+			);
+
+			if (isValid) {
+				valid = true;
+				break;
 			}
-
-			const accessURL = "https://gr8r.cloudflareaccess.com";
-			const verifyResponse = await fetch(`${accessURL}/cdn-cgi/access/certs`);
-			const { keys } = await verifyResponse.json();
-			if (!keys || keys.length === 0) {
-				return new Response("Unable to validate JWT (no certs)", {
-					status: 401,
-					headers: {
-						"Content-Type": "text/plain",
-						...getCorsHeaders(origin),
-					},
-				});
-			}
-
-			let valid = false;
-
-			for (const jwk of keys) {
-				try {
-					const key = await crypto.subtle.importKey(
-						"jwk",
-						jwk,
-						{
-							name: "RSASSA-PKCS1-v1_5",
-							hash: "SHA-256",
-						},
-						false,
-						["verify"]
-					);
-
-					const isValid = await crypto.subtle.verify(
-						"RSASSA-PKCS1-v1_5",
-						key,
-						base64urlToUint8Array(jwt.split(".")[2]),
-						new TextEncoder().encode(jwt.split(".")[0] + "." + jwt.split(".")[1])
-					);
-
-					if (isValid) {
-						valid = true;
-						break;
-					}
-				} catch (err) {
-					// silently ignore bad certs
-				}
-			}
-
-			if (!valid) {
-				await env.GRAFANA_WORKER.fetch("https://log", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						source: "gr8r-db1-worker",
-						level: "error",
-						message: "JWT verification failed",
-						meta: { origin, jwtStart: jwt?.slice(0, 15) }, // truncate for privacy
-					}),
-				});
-				return new Response("Invalid JWT", {
-					status: 401,
-					headers: {
-						"Content-Type": "text/plain",
-						...getCorsHeaders(origin),
-					},
-				});
+			} catch (err) {
+			// silently ignore bad certs
 			}
 		}
 
+		if (!valid) {
+			await env.GRAFANA_WORKER.fetch("https://log", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				source: "gr8r-db1-worker",
+				level: "error",
+				message: "JWT verification failed",
+				meta: { origin, jwtStart: jwt?.slice(0, 15) }, // truncate for privacy
+			}),
+			});
+			return new Response("Invalid JWT", {
+			status: 401,
+			headers: {
+				"Content-Type": "text/plain",
+				...getCorsHeaders(origin),
+			},
+			});
+		}
+		}		
 
 		const url = new URL(request.url);
 
