@@ -1,4 +1,4 @@
-//gr8r/workers/db1-worker v1.0.6 modified POST to UPSERT and included record change timestamps
+//gr8r/workers/db1-worker v1.0.7 added JSON response DB1data
 function getCorsHeaders(origin) {
 	const allowedOrigins = [
 		"https://admin.gr8r.com",
@@ -243,7 +243,33 @@ export default {
 			}),
 			});
 
-			return new Response("Upserted", { status: 200 });
+			const db1Data = {
+				title,
+				status,
+				video_type,
+				scheduled_at,
+				r2_url,
+				r2_transcript_url,
+				video_filename,
+				content_type,
+				file_size_bytes,
+				transcript_id,
+				planly_media_id,
+				social_copy_hook,
+				social_copy_body,
+				social_copy_cta,
+				hashtags,
+				record_created: now,
+				record_modified: now
+				};
+
+			return new Response(JSON.stringify({ success: true, db1Data }), {
+				status: 200,
+				headers: { "Content-Type": "application/json",
+				...getCorsHeaders(origin)
+					}
+				});
+
 
 		} catch (err) {
 			await env.GRAFANA_WORKER.fetch("https://log", {
@@ -257,7 +283,16 @@ export default {
 			}),
 			});
 
-			return new Response("Upsert Error: " + err.message, { status: 400 });
+			return new Response(JSON.stringify({
+				success: false,
+				error: "Upsert Error",
+				message: err.message
+				}), {
+				status: 400,
+				headers: { "Content-Type": "application/json",
+					...getCorsHeaders(origin)
+				}
+				});
 		}
 		}
 
