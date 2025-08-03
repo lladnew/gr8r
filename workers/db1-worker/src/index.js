@@ -37,6 +37,10 @@ function base64urlToUint8Array(base64url) {
 
 export default {
 	async fetch(request, env, ctx) {
+		
+		// DEBUG: Dump headers to verify Cloudflare injection
+		console.log("📥 Headers", Object.fromEntries(request.headers));
+
 		const origin = request.headers.get("Origin");
 		// TEMPORARY: Log all headers for debugging
 		const headersDump = {};
