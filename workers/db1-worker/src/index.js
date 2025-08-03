@@ -1,4 +1,4 @@
-//gr8r/workers/db1-worker v1.0.7 added JSON response DB1data
+//gr8r/workers/db1-worker v1.0.8 added router for internal requests to bypass JWT check
 function getCorsHeaders(origin) {
 	const allowedOrigins = [
 		"https://admin.gr8r.com",
@@ -92,7 +92,11 @@ export default {
 		//			}
 		//		}
 		
-		if (isExternalRequest(request)) {
+		if (!isExternalRequest(request)) {
+		// ✅ Allow internal requests without JWT
+		// No-op; continue into route handlers
+		} else {
+			// 🔒 JWT required for external requests
 			const jwt = request.headers.get("Cf-Access-Jwt-Assertion");
 
 			if (!jwt) {
@@ -105,8 +109,7 @@ export default {
 				});
 			}
 
-			const accessURL = "https://gr8r.cloudflareaccess.com"; // ← replace with your Access team domain if different
-
+			const accessURL = "https://gr8r.cloudflareaccess.com";
 			const verifyResponse = await fetch(`${accessURL}/cdn-cgi/access/certs`);
 			const { keys } = await verifyResponse.json();
 			if (!keys || keys.length === 0) {
@@ -119,36 +122,36 @@ export default {
 				});
 			}
 
-				let valid = false;
+			let valid = false;
 
-				for (const jwk of keys) {
+			for (const jwk of keys) {
 				try {
 					const key = await crypto.subtle.importKey(
-					"jwk",
-					jwk,
-					{
-						name: "RSASSA-PKCS1-v1_5",
-						hash: "SHA-256",
-					},
-					false,
-					["verify"]
+						"jwk",
+						jwk,
+						{
+							name: "RSASSA-PKCS1-v1_5",
+							hash: "SHA-256",
+						},
+						false,
+						["verify"]
 					);
 
 					const isValid = await crypto.subtle.verify(
-					"RSASSA-PKCS1-v1_5",
-					key,
-					base64urlToUint8Array(jwt.split(".")[2]),
-					new TextEncoder().encode(jwt.split(".")[0] + "." + jwt.split(".")[1])
+						"RSASSA-PKCS1-v1_5",
+						key,
+						base64urlToUint8Array(jwt.split(".")[2]),
+						new TextEncoder().encode(jwt.split(".")[0] + "." + jwt.split(".")[1])
 					);
 
 					if (isValid) {
-					valid = true;
-					break;
+						valid = true;
+						break;
 					}
 				} catch (err) {
 					// silently ignore bad certs
 				}
-				}
+			}
 
 			if (!valid) {
 				await env.GRAFANA_WORKER.fetch("https://log", {
@@ -170,6 +173,7 @@ export default {
 				});
 			}
 		}
+
 
 		const url = new URL(request.url);
 
