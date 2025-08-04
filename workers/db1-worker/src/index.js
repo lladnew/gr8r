@@ -37,7 +37,7 @@ async function checkInternalKey(request, env) {
 	if (!authHeader?.startsWith("Bearer ")) return false;
 
 	const providedKey = authHeader.slice(7); // Skip "Bearer "
-	const internalKey = env.DB1_INTERNAL_KEY;
+	const internalKey = await env.DB1_INTERNAL_KEY.get();
 	//logging key check to console below - delete following lines later
 	console.log("🔐 Bearer Key Debug", {
 	provided: providedKey,
