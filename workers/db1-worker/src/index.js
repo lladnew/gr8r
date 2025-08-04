@@ -1,4 +1,9 @@
-//gr8r/workers/db1-worker v1.0.8 added router for internal requests to bypass JWT check
+//gr8r-db1-worker v1.0.9
+//REMOVED: Legacy cf-worker header checks for internal access
+//ADDED: Authorization: Bearer support for DB1_INTERNAL_KEY
+//CHANGED: Internal calls validated via secure secret token instead of unreliable header detection
+//UPDATED: Grafana logs for caller identity and key tracing
+
 function getCorsHeaders(origin) {
 	const allowedOrigins = [
 		"https://admin.gr8r.com",
@@ -26,14 +31,16 @@ function base64urlToUint8Array(base64url) {
 	return Uint8Array.from(binary, (c) => c.charCodeAt(0));
 }
 
-	// Allowlist of trusted internal workers
-	const ALLOWED_INTERNAL_WORKERS = ["gr8r-videouploads-worker"];
+// ADDED: Check for internal Bearer key auth
+async function checkInternalKey(request, env) {
+	const authHeader = request.headers.get("Authorization");
+	if (!authHeader?.startsWith("Bearer ")) return false;
 
-	// Determine if request is from an internal Worker via cf-worker header
-	function isInternalRequest(request) {
-		const cfWorker = request.headers.get("cf-worker");
-		return ALLOWED_INTERNAL_WORKERS.includes(cfWorker);
-	}
+	const providedKey = authHeader.slice(7); // Skip "Bearer "
+	const internalKey = env.DB1_INTERNAL_KEY;
+
+	return providedKey === internalKey;
+}
 
 export default {
 	async fetch(request, env, ctx) {
@@ -84,22 +91,9 @@ export default {
 				headers: getCorsHeaders(request.headers.get("Origin")), // CHANGED
 			});
 		}
-		//commenting out check for Bearer secret below - added new Cf-Access-Jwt assertion and Pages
-		//		if (isExternalRequest(request)) {
-		//			const authHeader = request.headers.get("Authorization");
-		//			const expected = `Bearer ${await env.ADMIN_TOKEN.get()}`;
-		//			if (authHeader !== expected) {
-		//				return new Response("Unauthorized", {
-		//					status: 401,
-		//					headers: {
-		//						"Content-Type": "text/plain",
-		//						...getCorsHeaders(origin),
-		//					},
-		//					});
-		//			}
-		//		}
 		
-		const isInternal = isInternalRequest(request);
+		// ADDED: Replace legacy internal header check with Authorization: Bearer
+		const isInternal = await checkInternalKey(request, env);
 
 		await env.GRAFANA_WORKER.fetch("https://log", {
 		method: "POST",
@@ -109,7 +103,7 @@ export default {
 			level: "debug",
 			message: "Caller identity check",
 			meta: {
-			cf_worker: request.headers.get("cf-worker"),
+			auth_header: request.headers.get("Authorization")?.slice(0, 15), // truncated
 			internal: isInternal,
 			},
 		}),

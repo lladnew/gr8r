@@ -26,3 +26,8 @@ database_id = "287776a7-cce2-4171-a7c0-e8a5279dc4b0"
 binding = "ADMIN_TOKEN"
 store_id = "23d622f0d3b8499fa021fad6149af8c9"
 secret_name = "ADMIN_TOKEN"
+
+[[secrets_store_secrets]]
+binding = "DB1_INTERNAL_KEY"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "DB1_INTERNAL_KEY"
