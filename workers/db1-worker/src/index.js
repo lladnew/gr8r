@@ -38,7 +38,13 @@ async function checkInternalKey(request, env) {
 
 	const providedKey = authHeader.slice(7); // Skip "Bearer "
 	const internalKey = env.DB1_INTERNAL_KEY;
-
+	//logging key check to console below - delete following lines later
+	console.log("🔐 Bearer Key Check", {
+	provided_start: providedKey?.slice(0, 5),
+	expected_start: internalKey?.slice(0, 5),
+	match: providedKey === internalKey
+	});
+	//end temp console logging
 	return providedKey === internalKey;
 }
 
@@ -52,7 +58,7 @@ export default {
 		// TEMPORARY: Log all headers for debugging
 		const headersDump = {};
 		for (const [key, value] of request.headers.entries()) {
-			headersDump[key] = value;
+		headersDump[`headers_${key}`] = value;
 		}
 
 		await env.GRAFANA_WORKER.fetch("https://log", {
