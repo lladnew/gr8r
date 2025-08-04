@@ -1,6 +1,5 @@
-//gr8r-db1-worker v1.0.9
-//REMOVED: Legacy cf-worker header checks for internal access
-//ADDED: Authorization: Bearer support for DB1_INTERNAL_KEY
+//gr8r-db1-worker v1.2.0
+//ADDED: Authorization: Bearer support for DB1_INTERNAL_KEY with proper call@
 //CHANGED: Internal calls validated via secure secret token instead of unreliable header detection
 //UPDATED: Grafana logs for caller identity and key tracing
 
