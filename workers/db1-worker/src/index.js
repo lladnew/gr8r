@@ -39,11 +39,14 @@ async function checkInternalKey(request, env) {
 	const providedKey = authHeader.slice(7); // Skip "Bearer "
 	const internalKey = env.DB1_INTERNAL_KEY;
 	//logging key check to console below - delete following lines later
-	console.log("🔐 Bearer Key Check", {
-	provided_start: providedKey?.slice(0, 5),
-	expected_start: internalKey?.slice(0, 5),
-	match: providedKey === internalKey
+	console.log("🔐 Bearer Key Debug", {
+	provided: providedKey,
+	expected: internalKey,
+	match: providedKey === internalKey,
+	provided_len: providedKey.length,
+	expected_len: internalKey.length
 	});
+
 	//end temp console logging
 	return providedKey === internalKey;
 }
