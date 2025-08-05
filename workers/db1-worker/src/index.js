@@ -1,3 +1,6 @@
+//gr8r-db1-worker v1.2.3
+//updating binding placeholders to 18 fields (chatGPT has issues counting it seems)
+//added some extra console logging (binding stmt.args and length) for troubleshooting
 //gr8r-db1-worker v1.2.2
 //added console log to verify code version UPSERT with 17 fields
 //added console log to display the bindings
@@ -176,7 +179,7 @@ export default {
 		}		
 
 // new UPSERT code includes time/date stamping for record_created and/or record_modified
-console.log("✅ Running db1-worker UPSERT with 17 fields");
+console.log("✅ Running db1-worker UPSERT with 18 bindings (17fiels + conflict"); //DEBUG
 
 		if (request.method === "POST" && url.pathname === "/db1/videos") {
 		try {
@@ -228,6 +231,7 @@ console.log("🧪 Binding values length:", [
   hashtags, now, now
 ].length);
 
+			// CHANGED: Bind 18 parameters (last one is for record_modified in ON CONFLICT)
 			const stmt = env.DB.prepare(`
 			INSERT INTO videos (
 				title, status, video_type, scheduled_at, r2_url, r2_transcript_url,
@@ -252,8 +256,8 @@ console.log("🧪 Binding values length:", [
 				social_copy_cta = COALESCE(excluded.social_copy_cta, videos.social_copy_cta),
 				hashtags = COALESCE(excluded.hashtags, videos.hashtags),
 				record_modified = ?
-
-			`).bind(
+			`)
+			.bind(
 				fullPayload.title,
 				fullPayload.status,
 				fullPayload.video_type,
@@ -270,10 +274,12 @@ console.log("🧪 Binding values length:", [
 				fullPayload.social_copy_cta,
 				fullPayload.hashtags,
 				fullPayload.record_created,
-				fullPayload.record_modified
+				fullPayload.record_modified, // <-- for VALUES(...)
+				fullPayload.record_modified  // <-- for ON CONFLICT clause
 			);
-
-console.log("✅ DB1 binding fields:", {
+console.log("🧪 Final bind count:", stmt.args.length); //DEBUG
+console.log("🧪 Bound values:", stmt.args); //DEBUG
+console.log("✅ DB1 binding fields:", { //DEBUG
   title,
   status,
   video_type,
