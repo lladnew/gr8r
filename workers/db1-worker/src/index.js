@@ -1,3 +1,5 @@
+//gr8r-db1-worker v1.2.4
+//Added one extra ? value to the UPSERT binding
 //gr8r-db1-worker v1.2.3
 //updating binding placeholders to 18 fields (chatGPT has issues counting it seems)
 //added some extra console logging (binding stmt.args and length) for troubleshooting
@@ -239,7 +241,7 @@ console.log("🧪 Binding values length:", [
 				planly_media_id, social_copy_hook, social_copy_body, social_copy_cta,
 				hashtags, record_created, record_modified
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(title) DO UPDATE SET
 				status = COALESCE(excluded.status, videos.status),
 				video_type = COALESCE(excluded.video_type, videos.video_type),
