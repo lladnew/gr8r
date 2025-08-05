@@ -224,8 +224,8 @@ export default {
 			title, status, video_type, scheduled_at, r2_url, r2_transcript_url,
 			video_filename, content_type, file_size_bytes, transcript_id,
 			planly_media_id, social_copy_hook, social_copy_body, social_copy_cta,
-			hashtags, now, now // for VALUES clause (created + modified)
-			).bind(now); // second bind: for UPDATE clause (modified)
+			hashtags, now, now // last now is for UPDATE clause too
+			);
 
 			await stmt.run();
 
