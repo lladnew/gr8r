@@ -181,7 +181,7 @@ export default {
 		}		
 
 // new UPSERT code includes time/date stamping for record_created and/or record_modified
-console.log("✅ Running db1-worker UPSERT with 18 bindings (17fiels + conflict"); //DEBUG
+console.log("✅ Running db1-worker UPSERT with 18 bindings (17fiels + conflict)"); //DEBUG
 
 		if (request.method === "POST" && url.pathname === "/db1/videos") {
 		try {

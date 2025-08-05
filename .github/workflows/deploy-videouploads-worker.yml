@@ -1,0 +1,19 @@
+name: Deploy videouploads-worker
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'workers/videouploads-worker/**'
+      - '.github/workflows/videouploads-worker.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/universal-worker.yml
+    with:
+      workingDirectory: 'workers/videouploads-worker'
+      workerName: 'videouploads-worker'
+    secrets:
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

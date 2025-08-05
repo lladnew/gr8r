@@ -1,0 +1,32 @@
+name = "gr8r-videouploads-worker"
+main = "src/index.js"
+compatibility_date = "2025-06-18"
+
+[[r2_buckets]]
+binding = "VIDEO_BUCKET"
+bucket_name = "videos-gr8r"
+
+[[services]]
+binding = "AIRTABLE"
+service = "gr8r-airtable-worker"
+entrypoint = "fetch"
+
+[[services]]
+binding = "REVAI"
+service = "gr8r-revai-worker"
+entrypoint = "fetch"
+
+[[services]]
+binding = "GRAFANA"
+service = "gr8r-grafana-worker"
+entrypoint = "fetch"
+
+[[services]]
+binding = "DB1"
+service = "gr8r-db1-worker"
+entrypoint = "fetch"
+
+[[secrets_store_secrets]]
+binding = "DB1_INTERNAL_KEY"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "DB1_INTERNAL_KEY"
