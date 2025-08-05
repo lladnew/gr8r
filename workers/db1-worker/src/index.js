@@ -1,7 +1,7 @@
-//gr8r-db1-worker v1.2.0
-//ADDED: Authorization: Bearer support for DB1_INTERNAL_KEY with proper call@
-//CHANGED: Internal calls validated via secure secret token instead of unreliable header detection
-//UPDATED: Grafana logs for caller identity and key tracing
+//gr8r-db1-worker v1.2.1
+//UPDATED: field values to null when first declared so that if not overwritten they wil be null and not throw the undefined error
+//ADDED: key caching for this worker
+//Removed: full header dump and console log that was added for troubleshooting auth
 
 function getCorsHeaders(origin) {
 	const allowedOrigins = [
@@ -30,54 +30,27 @@ function base64urlToUint8Array(base64url) {
 	return Uint8Array.from(binary, (c) => c.charCodeAt(0));
 }
 
-// ADDED: Check for internal Bearer key auth
+// Check for internal Bearer key auth and added key caching for this worker
 async function checkInternalKey(request, env) {
 	const authHeader = request.headers.get("Authorization");
 	if (!authHeader?.startsWith("Bearer ")) return false;
 
-	const providedKey = authHeader.slice(7); // Skip "Bearer "
-	const internalKey = await env.DB1_INTERNAL_KEY.get();
-	//logging key check to console below - delete following lines later
-	console.log("🔐 Bearer Key Debug", {
-	provided: providedKey,
-	expected: internalKey,
-	match: providedKey === internalKey,
-	provided_len: providedKey.length,
-	expected_len: internalKey.length
-	});
+	// Only fetch secret once per instance
+	if (!cachedInternalKey) {
+		cachedInternalKey = await env.DB1_INTERNAL_KEY.get();
+	}
 
-	//end temp console logging
-	return providedKey === internalKey;
+	const providedKey = authHeader.slice(7); // Skip "Bearer "
+	return providedKey === cachedInternalKey;
 }
+
+let cachedInternalKey = null;
 
 export default {
 	async fetch(request, env, ctx) {
-		
-		// DEBUG: Dump headers to verify Cloudflare injection
-		console.log("📥 Headers", Object.fromEntries(request.headers));
-
+		const url = new URL(request.url);
 		const origin = request.headers.get("Origin");
-		// TEMPORARY: Log all headers for debugging
-		const headersDump = {};
-		for (const [key, value] of request.headers.entries()) {
-		headersDump[`headers_${key}`] = value;
-		}
-
-		await env.GRAFANA_WORKER.fetch("https://log", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				source: "gr8r-db1-worker",
-				level: "debug",
-				message: "Full header dump for JWT debugging",
-				meta: {
-					method: request.method,
-					url: request.url,
-					headers: headersDump,
-				},
-			}),
-		});
-
+		
 		await env.GRAFANA_WORKER.fetch("https://log", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -197,8 +170,6 @@ export default {
 		}
 		}		
 
-		const url = new URL(request.url);
-
 // new UPSERT code includes time/date stamping for record_created and/or record_modified
 
 		if (request.method === "POST" && url.pathname === "/db1/videos") {
@@ -206,22 +177,22 @@ export default {
 			const body = await request.json();
 
 			const {
-			title,
-			status,
-			video_type,
-			scheduled_at,
-			r2_url,
-			r2_transcript_url,
-			video_filename,
-			content_type,
-			file_size_bytes,
-			transcript_id,
-			planly_media_id,
-			social_copy_hook,
-			social_copy_body,
-			social_copy_cta,
-			hashtags
-			} = body;
+				title = null,
+				status = null,
+				video_type = null,
+				scheduled_at = null,
+				r2_url = null,
+				r2_transcript_url = null,
+				video_filename = null,
+				content_type = null,
+				file_size_bytes = null,
+				transcript_id = null,
+				planly_media_id = null,
+				social_copy_hook = null,
+				social_copy_body = null,
+				social_copy_cta = null,
+				hashtags = null
+				} = body;
 
 			const now = new Date().toISOString();
 
@@ -374,13 +345,17 @@ export default {
 				});
 
 				// CHANGED: Apply dynamic CORS headers on error
-				return new Response(`Error: ${err.message}`, {
-					status: 500,
-					headers: {
-						"Content-Type": "text/plain",
-						...getCorsHeaders(request.headers.get("Origin")), // CHANGED
-					},
+				return new Response(JSON.stringify({
+				success: false,
+				error: err.message
+				}), {
+				status: 500,
+				headers: {
+					"Content-Type": "application/json",
+					...getCorsHeaders(request.headers.get("Origin")),
+				},
 				});
+
 			}
 		}
 
