@@ -1,3 +1,8 @@
+//gr8r-db1-worker v1.2.2
+//added console log to verify code version UPSERT with 17 fields
+//added console log to display the bindings
+//added console log to show Binding values length
+//updated bind to use fullPayload values to pass something that DB1 can handle each time
 //gr8r-db1-worker v1.2.1
 //UPDATED: field values to null when first declared so that if not overwritten they wil be null and not throw the undefined error
 //ADDED: key caching for this worker
@@ -171,6 +176,7 @@ export default {
 		}		
 
 // new UPSERT code includes time/date stamping for record_created and/or record_modified
+console.log("✅ Running db1-worker UPSERT with 17 fields");
 
 		if (request.method === "POST" && url.pathname === "/db1/videos") {
 		try {
@@ -195,6 +201,32 @@ export default {
 				} = body;
 
 			const now = new Date().toISOString();
+			const fullPayload = {
+				title,
+				status,
+				video_type,
+				scheduled_at,
+				r2_url,
+				r2_transcript_url,
+				video_filename,
+				content_type,
+				file_size_bytes,
+				transcript_id,
+				planly_media_id,
+				social_copy_hook,
+				social_copy_body,
+				social_copy_cta,
+				hashtags,
+				record_created: now,
+				record_modified: now
+				};
+
+console.log("🧪 Binding values length:", [
+  title, status, video_type, scheduled_at, r2_url, r2_transcript_url,
+  video_filename, content_type, file_size_bytes, transcript_id,
+  planly_media_id, social_copy_hook, social_copy_body, social_copy_cta,
+  hashtags, now, now
+].length);
 
 			const stmt = env.DB.prepare(`
 			INSERT INTO videos (
@@ -205,28 +237,60 @@ export default {
 			)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(title) DO UPDATE SET
-				status = excluded.status,
-				video_type = excluded.video_type,
-				scheduled_at = excluded.scheduled_at,
-				r2_url = excluded.r2_url,
-				r2_transcript_url = excluded.r2_transcript_url,
-				video_filename = excluded.video_filename,
-				content_type = excluded.content_type,
-				file_size_bytes = excluded.file_size_bytes,
-				transcript_id = excluded.transcript_id,
-				planly_media_id = excluded.planly_media_id,
-				social_copy_hook = excluded.social_copy_hook,
-				social_copy_body = excluded.social_copy_body,
-				social_copy_cta = excluded.social_copy_cta,
-				hashtags = excluded.hashtags,
+				status = COALESCE(excluded.status, videos.status),
+				video_type = COALESCE(excluded.video_type, videos.video_type),
+				scheduled_at = COALESCE(excluded.scheduled_at, videos.scheduled_at),
+				r2_url = COALESCE(excluded.r2_url, videos.r2_url),
+				r2_transcript_url = COALESCE(excluded.r2_transcript_url, videos.r2_transcript_url),
+				video_filename = COALESCE(excluded.video_filename, videos.video_filename),
+				content_type = COALESCE(excluded.content_type, videos.content_type),
+				file_size_bytes = COALESCE(excluded.file_size_bytes, videos.file_size_bytes),
+				transcript_id = COALESCE(excluded.transcript_id, videos.transcript_id),
+				planly_media_id = COALESCE(excluded.planly_media_id, videos.planly_media_id),
+				social_copy_hook = COALESCE(excluded.social_copy_hook, videos.social_copy_hook),
+				social_copy_body = COALESCE(excluded.social_copy_body, videos.social_copy_body),
+				social_copy_cta = COALESCE(excluded.social_copy_cta, videos.social_copy_cta),
+				hashtags = COALESCE(excluded.hashtags, videos.hashtags),
 				record_modified = ?
+
 			`).bind(
-			title, status, video_type, scheduled_at, r2_url, r2_transcript_url,
-			video_filename, content_type, file_size_bytes, transcript_id,
-			planly_media_id, social_copy_hook, social_copy_body, social_copy_cta,
-			hashtags, now, now // last now is for UPDATE clause too
+				fullPayload.title,
+				fullPayload.status,
+				fullPayload.video_type,
+				fullPayload.scheduled_at,
+				fullPayload.r2_url,
+				fullPayload.r2_transcript_url,
+				fullPayload.video_filename,
+				fullPayload.content_type,
+				fullPayload.file_size_bytes,
+				fullPayload.transcript_id,
+				fullPayload.planly_media_id,
+				fullPayload.social_copy_hook,
+				fullPayload.social_copy_body,
+				fullPayload.social_copy_cta,
+				fullPayload.hashtags,
+				fullPayload.record_created,
+				fullPayload.record_modified
 			);
 
+console.log("✅ DB1 binding fields:", {
+  title,
+  status,
+  video_type,
+  scheduled_at,
+  r2_url,
+  r2_transcript_url,
+  video_filename,
+  content_type,
+  file_size_bytes,
+  transcript_id,
+  planly_media_id,
+  social_copy_hook,
+  social_copy_body,
+  social_copy_cta,
+  hashtags,
+  now
+});
 			await stmt.run();
 
 			await env.GRAFANA_WORKER.fetch("https://log", {
