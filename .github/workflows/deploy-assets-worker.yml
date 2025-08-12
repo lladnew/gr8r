@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - 'workers/assets-worker/**'
-      - '.github/workflows/gr8r-assets-worker.yml'
+      - '.github/workflows/assets-worker.yml'
   workflow_dispatch:
 
 jobs:
