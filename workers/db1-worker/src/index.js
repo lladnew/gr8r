@@ -1,3 +1,5 @@
+//gr8r-db1-worker v1.2.5
+//Removing a ? value from the UPSERT binding
 //gr8r-db1-worker v1.2.4
 //Added one extra ? value to the UPSERT binding
 //gr8r-db1-worker v1.2.3
@@ -181,7 +183,7 @@ export default {
 		}		
 
 // new UPSERT code includes time/date stamping for record_created and/or record_modified
-console.log("✅ Running db1-worker UPSERT with 18 bindings (17fiels + conflict)"); //DEBUG
+console.log("✅ Running db1-worker UPSERT with 18 bindings (17fields + conflict)"); //DEBUG
 
 		if (request.method === "POST" && url.pathname === "/db1/videos") {
 		try {
@@ -241,7 +243,7 @@ console.log("🧪 Binding values length:", [
 				planly_media_id, social_copy_hook, social_copy_body, social_copy_cta,
 				hashtags, record_created, record_modified
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(title) DO UPDATE SET
 				status = COALESCE(excluded.status, videos.status),
 				video_type = COALESCE(excluded.video_type, videos.video_type),
