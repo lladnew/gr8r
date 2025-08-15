@@ -1,3 +1,5 @@
+//gr8r-db1-worker v1.2.6
+//Removing console logging lines that did not use "optional chaining" stmt.args.length and crashed the worker!
 //gr8r-db1-worker v1.2.5
 //Removing a ? value from the UPSERT binding
 //gr8r-db1-worker v1.2.4
@@ -60,6 +62,10 @@ let cachedInternalKey = null;
 
 export default {
 	async fetch(request, env, ctx) {
+		//DEBUG: Check what's available in env
+		console.log("🔍 Available env bindings:", Object.keys(env));
+		console.log("🔍 env.DB type:", typeof env.DB);
+		console.log("🔍 env.DB1 type:", typeof env.DB1);
 		const url = new URL(request.url);
 		const origin = request.headers.get("Origin");
 		
@@ -235,7 +241,6 @@ console.log("🧪 Binding values length:", [
   hashtags, now, now
 ].length);
 
-			// CHANGED: Bind 18 parameters (last one is for record_modified in ON CONFLICT)
 			const stmt = env.DB.prepare(`
 			INSERT INTO videos (
 				title, status, video_type, scheduled_at, r2_url, r2_transcript_url,
