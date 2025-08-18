@@ -286,8 +286,6 @@ console.log("🧪 Binding values length:", [
 				fullPayload.record_modified, // <-- for VALUES(...)
 				fullPayload.record_modified  // <-- for ON CONFLICT clause
 			);
-console.log("🧪 Final bind count:", stmt.args.length); //DEBUG
-console.log("🧪 Bound values:", stmt.args); //DEBUG
 console.log("✅ DB1 binding fields:", { //DEBUG
   title,
   status,
