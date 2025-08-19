@@ -14,6 +14,6 @@ jobs:
     uses: ./.github/workflows/_deploy-worker.yml
     with:
       workingDirectory: 'workers/assets-worker'
-      workerName: 'assets-worker'
+      workerName: 'gr8r-assets-worker'
     secrets:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

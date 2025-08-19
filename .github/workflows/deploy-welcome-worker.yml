@@ -1,19 +1,19 @@
-name: Deploy grafana-worker
+name: Deploy welcome-worker
 
 on:
   push:
     branches:
       - main
     paths:
-      - 'workers/grafana-worker/**'
-      - '.github/workflows/grafana-worker.yml'
+      - 'workers/welcome-worker/**'
+      - '.github/workflows/welcome-worker.yml'
   workflow_dispatch:
 
 jobs:
   deploy:
     uses: ./.github/workflows/_deploy-worker.yml
     with:
-      workingDirectory: 'workers/grafana-worker'
-      workerName: 'gr8r-grafana-worker'
+      workingDirectory: 'workers/welcome-worker'
+      workerName: 'gr8r-welcome-worker'
     secrets:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

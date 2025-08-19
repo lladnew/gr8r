@@ -11,6 +11,6 @@ jobs:
     uses: ./.github/workflows/_deploy-worker.yml
     with:
       workingDirectory: workers/subscribe-worker
-      workerName: subscribe
+      workerName: gr8r-subscribe-worker
     secrets:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

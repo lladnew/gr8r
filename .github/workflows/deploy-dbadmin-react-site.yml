@@ -11,6 +11,6 @@ jobs:
     uses: ./.github/workflows/_deploy-sites.yml
     with:
       workingDirectory: sites/dbadmin-react-site
-      projectName: dbadmin-react-site
+      projectName: gr8r-dbadmin-react-site
     secrets:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

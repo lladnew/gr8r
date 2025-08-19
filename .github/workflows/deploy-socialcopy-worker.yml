@@ -1,0 +1,19 @@
+name: Deploy socialcopy-worker
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'workers/socialcopy-worker/**'
+      - '.github/workflows/socialcopy-worker.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_deploy-worker.yml
+    with:
+      workingDirectory: 'workers/socialcopy-worker'
+      workerName: 'gr8r-socialcopy-worker'
+    secrets:
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

@@ -14,6 +14,6 @@ jobs:
     uses: ./.github/workflows/_deploy-worker.yml
     with:
       workingDirectory: 'workers/revai-worker'
-      workerName: 'revai-worker'
+      workerName: 'gr8r-revai-worker'
     secrets:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

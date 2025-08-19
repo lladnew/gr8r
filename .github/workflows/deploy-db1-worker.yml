@@ -12,6 +12,6 @@ jobs:
     uses: ./.github/workflows/_deploy-worker.yml
     with:
       workingDirectory: workers/db1-worker
-      workerName: db1-worker
+      workerName: gr8r-db1-worker
     secrets:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
