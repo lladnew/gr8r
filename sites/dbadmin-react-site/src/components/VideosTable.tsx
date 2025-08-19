@@ -1,7 +1,8 @@
+//dbadmin-react-site/src/components/VideosTable.tsx v1.0.5 CHANGES: revised to use static dev validation when running in local dev mode; adjusted use dependency for copied cells to not re-fetch the whole table
 //dbadmin-react-site/src/components/VideosTable.tsx v1.0.3 CHANGES: added pagination to show how many pages are availabe in UI
 //dbadmin-react-site/src/components/VideosTable.tsx v1.0.2 CHANGES: sticky column headers on verticle scroll and horizontal scrollbar always visible
 //dbadmin-react-site/src/components/VideosTable.tsx v1.0.1
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -23,6 +24,8 @@ export default function VideosTable() {
   const [globalFilter, setGlobalFilter] = useState('');
   const [showColumnModal, setShowColumnModal] = useState(false);
   const [copiedCellId, setCopiedCellId] = useState<string | null>(null);
+  const copiedCellIdRef = useRef<string | null>(null);
+  useEffect(() => { copiedCellIdRef.current = copiedCellId; }, [copiedCellId]);
   const [pagination, setPagination] = useState({
     pageIndex: 0,
     pageSize: 25,
@@ -38,17 +41,12 @@ export default function VideosTable() {
   useEffect(() => {
     (async () => {
     
-      const headers: HeadersInit = {};
+        const API_BASE = import.meta.env.DEV ? '' : 'https://admin.gr8r.com';
+        const res = await fetch(`${API_BASE}/db1/videos`, {
+            credentials: import.meta.env.DEV ? 'same-origin' : 'include',
+        });
 
-      if (import.meta.env.DEV) {
-        headers["Authorization"] = `Bearer ${import.meta.env.VITE_GR8R_ADMIN_TOKEN}`;
-      }
 
-      if (import.meta.env.DEV) {
-      console.log("👾 DEV MODE: Sending internal Authorization token");
-      }
-
-      const res = await fetch("https://admin.gr8r.com/db1/videos", { headers });
 
          const records = await res.json();
       if (records.length) {
@@ -70,10 +68,11 @@ export default function VideosTable() {
               const val = info.getValue();
               const cellId = `${info.row.id}-${key}`;
               const display = val?.toString() || '-';
-              const isCopied = copiedCellId === cellId;
+              const isCopied = copiedCellIdRef.current === cellId;
+            
 //temp commentout this line  const isCopied = true;
 // 🔍 Log on every render
-console.log(`[Render] ${cellId} → copiedCellId: ${copiedCellId} → isCopied: ${isCopied}`);
+console.log(`[Render] ${cellId} → copiedCellId: ${copiedCellIdRef.current} → isCopied: ${isCopied}`);
 
               return (
                 <Tooltip.Root delayDuration={200} open={isCopied || undefined}>
@@ -125,7 +124,7 @@ console.log(`[Render] ${cellId} → copiedCellId: ${copiedCellId} → isCopied: 
         );
       }
     })();
-  }, [copiedCellId]);
+  }, []);
 
   const handleResetColumns = () => {
     const reset = Object.fromEntries(

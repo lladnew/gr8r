@@ -30,6 +30,7 @@ function getCorsHeaders(origin) {
 	const headers = {
 		"Access-Control-Allow-Headers": "Authorization, Content-Type",
 		"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+		"Access-Control-Allow-Credentials": "true",
 	};
 
 	if (origin && allowedOrigins.includes(origin)) {
