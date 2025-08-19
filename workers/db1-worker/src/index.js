@@ -1,4 +1,4 @@
-//gr8r-db1-worker v1.2.7 modified GET to return the 100 most recent by record_modified
+//gr8r-db1-worker v1.2.7 modified GET to return All sortec by most recent record_modified
 //gr8r-db1-worker v1.2.6
 //Removing console logging lines that did not use "optional chaining" stmt.args.length and crashed the worker!
 //gr8r-db1-worker v1.2.5
@@ -395,7 +395,7 @@ console.log("✅ DB1 binding fields:", { //DEBUG
 					query += " WHERE " + conditions.join(" AND ");
 				}
 
-				query += " ORDER BY record_modified DESC LIMIT 100";
+				query += " ORDER BY record_modified DESC";
 
 				const results = await env.DB.prepare(query).bind(...params).all();
 
