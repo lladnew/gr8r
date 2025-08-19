@@ -1,0 +1,19 @@
+name: Deploy revai-callback-worker
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'workers/revai-callback-worker/**'
+      - '.github/workflows/revai-callback-worker.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_deploy-worker.yml
+    with:
+      workingDirectory: 'workers/revai-callback-worker'
+      workerName: 'revai-callback-worker'
+    secrets:
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
