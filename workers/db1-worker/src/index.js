@@ -24,7 +24,6 @@ function getCorsHeaders(origin) {
 		"https://test.admin.gr8r.com",
 		"http://localhost:5173",
 		"https://dbadmin-react-site.pages.dev",
-
 	];
 
 	const headers = {
@@ -34,6 +33,7 @@ function getCorsHeaders(origin) {
 
 	if (origin && allowedOrigins.includes(origin)) {
 		headers["Access-Control-Allow-Origin"] = origin;
+		headers["Vary"] = "Origin";
 	}
 
 	return headers;

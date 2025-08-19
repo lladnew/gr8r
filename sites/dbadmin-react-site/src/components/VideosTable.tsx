@@ -38,9 +38,19 @@ export default function VideosTable() {
   useEffect(() => {
     (async () => {
     
-      const res = await fetch('https://admin.gr8r.com/db1/videos');
+      const headers: HeadersInit = {};
 
-      const records = await res.json();
+      if (import.meta.env.DEV) {
+        headers["Authorization"] = `Bearer ${import.meta.env.VITE_GR8R_ADMIN_TOKEN}`;
+      }
+
+      if (import.meta.env.DEV) {
+      console.log("👾 DEV MODE: Sending internal Authorization token");
+      }
+
+      const res = await fetch("https://admin.gr8r.com/db1/videos", { headers });
+
+         const records = await res.json();
       if (records.length) {
         setData(records);
         const sample = records[0];
