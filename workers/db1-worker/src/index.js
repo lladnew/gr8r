@@ -70,6 +70,7 @@ export default {
 		console.log("🔍 env.DB1 type:", typeof env.DB1);
 		const url = new URL(request.url);
 		const origin = request.headers.get("origin");
+		console.log("💥 Detected Origin header:", origin);
 		
 		await env.GRAFANA_WORKER.fetch("https://log", {
 			method: "POST",
