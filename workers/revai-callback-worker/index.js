@@ -19,30 +19,6 @@
 // undoing eroneous "fix" in 1.1.9
 // v1.2.0 gr8r-revai-callback-worker
 // Removed "env.ASSETS.fetch('r2/put') and replaced with direct evn.VIDEO_BUCKET.put(...)
-// v1.1.9
-//FIXED: Internal fetch path for REVAIFETCH now uses correct relative path (/api/revai/fetch-transcript) instead of invalid full URL with /internal prefix (prevented "Not found" error)
-//ADDED: Error handling and Grafana logging for Airtable get record check, including HTTP status and response body on failure
-// v1.1.8 gr8r-revai-callback-worker
-// - ADDED: console.log and Grafana debug log of REVAIFETCH payload before fetch
-// - ADDED: try/catch block around REVAIFETCH call with explicit error and response logging
-// - ADDED: logs response body and status when REVAIFETCH responds with non-200
-// - RETAINED: all behavior and logs from v1.1.7
-//v1.1.7 gr8r-revai-callback-worker
-//ADDED: console.log('[revai-callback] Top of handler') to verify if the Worker is executing at all
-//ADDED: secondary console.log() after request.clone().text() to verify body read step
-//RETAINED: all previous logic from v1.1.6, including robust JSON parsing and Grafana logging
-//v1.1.6 gr8r-revai-callback-worker
-//- SPLIT: separated rawBody read and JSON.parse into two try/catch blocks for granular error capture
-//- ADDED: error logging to Grafana if body read or parse fails, with full rawBody and error message
-//- RETAINED: existing debug and console logs where successful
-// v1.1.5 gr8r-revai-callback-worker
-// - ADDED: console.log of fetched transcript text for debugging (v1.1.5)
-// - ADDED: Grafana log with fetchText snippet and status for debugging (v1.1.5)
-// - RETAINED: all logic from v1.1.4, no changes to fetch, R2, Airtable steps (v1.1.5)
-// v1.1.4 gr8r-revai-callback-worker
-// - FIXED: correctly expects plain text response from revai-worker fetch-transcript endpoint (v1.1.4)
-// - RETAINED: entire logic from v1.1.3 including binding usage and structured Grafana logs (v1.1.4)
-
 
 console.log('[revai-callback] Worker loaded'); // Logs when the Worker is initialized (cold start)
 export default {
