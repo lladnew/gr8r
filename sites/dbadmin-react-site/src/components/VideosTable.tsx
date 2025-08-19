@@ -1,3 +1,4 @@
+//dbadmin-react-site/src/components/VideosTable.tsx v1.0.2 CHANGES: sticky column headers on verticle scroll and horizontal scrollbar always visible
 //dbadmin-react-site/src/components/VideosTable.tsx v1.0.1
 import React, { useEffect, useState } from 'react';
 import {
@@ -159,14 +160,15 @@ console.log(`[Render] ${cellId} → copiedCellId: ${copiedCellId} → isCopied: 
           </button>
         </div>
 
-        <table className="min-w-full divide-y divide-gray-300 text-sm table-fixed">
+        <div className="overflow-auto max-h-[calc(100vh-200px)]">
+          <table className="min-w-[1000px] divide-y divide-gray-300 text-sm table-fixed">
           <thead className="bg-gray-50">
             {table.getHeaderGroups().map(headerGroup => (
               <tr key={headerGroup.id}>
                 {headerGroup.headers.map(header => (
                   <th
                     key={header.id}
-                    className="px-2 py-1 text-left whitespace-nowrap"
+                    className="px-2 py-1 text-left whitespace-nowrap sticky top-0 z-10 bg-white"
                   >
                     {flexRender(header.column.columnDef.header, header.getContext())}
                   </th>
@@ -189,6 +191,7 @@ console.log(`[Render] ${cellId} → copiedCellId: ${copiedCellId} → isCopied: 
             ))}
           </tbody>
         </table>
+        </div>
 
         <div className="mt-4 flex items-center gap-4">
           <button
