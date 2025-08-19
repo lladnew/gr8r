@@ -1,4 +1,5 @@
-//gr8r-db1-worker v1.2.7 modified GET to return All sortec by most recent record_modified
+//gr8r-db1-worker v1.2.8 modified origin for CORS checks - fighting with dev browser issues
+//gr8r-db1-worker v1.2.7 modified GET to return All sorted by most recent record_modified
 //gr8r-db1-worker v1.2.6
 //Removing console logging lines that did not use "optional chaining" stmt.args.length and crashed the worker!
 //gr8r-db1-worker v1.2.5
@@ -68,7 +69,7 @@ export default {
 		console.log("🔍 env.DB type:", typeof env.DB);
 		console.log("🔍 env.DB1 type:", typeof env.DB1);
 		const url = new URL(request.url);
-		const origin = request.headers.get("Origin");
+		const origin = request.headers.get("origin");
 		
 		await env.GRAFANA_WORKER.fetch("https://log", {
 			method: "POST",
@@ -88,7 +89,7 @@ export default {
 		if (request.method === "OPTIONS") {
 			return new Response(null, {
 				status: 204,
-				headers: getCorsHeaders(request.headers.get("Origin")), // CHANGED
+				headers: getCorsHeaders(origin),
 			});
 		}
 		
@@ -403,7 +404,7 @@ console.log("✅ DB1 binding fields:", { //DEBUG
 				return new Response(JSON.stringify(results.results, null, 2), {
 					headers: {
 						"Content-Type": "application/json",
-						...getCorsHeaders(request.headers.get("Origin")), // CHANGED
+						...getCorsHeaders(origin),
 					},
 				});
 
@@ -430,7 +431,7 @@ console.log("✅ DB1 binding fields:", { //DEBUG
 				status: 500,
 				headers: {
 					"Content-Type": "application/json",
-					...getCorsHeaders(request.headers.get("Origin")),
+					...getCorsHeaders(origin),
 				},
 				});
 
