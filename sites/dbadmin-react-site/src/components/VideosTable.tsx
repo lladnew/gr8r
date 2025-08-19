@@ -1,3 +1,4 @@
+//dbadmin-react-site/src/components/VideosTable.tsx v1.0.3 CHANGES: added pagination to show how many pages are availabe in UI
 //dbadmin-react-site/src/components/VideosTable.tsx v1.0.2 CHANGES: sticky column headers on verticle scroll and horizontal scrollbar always visible
 //dbadmin-react-site/src/components/VideosTable.tsx v1.0.1
 import React, { useEffect, useState } from 'react';
@@ -22,6 +23,11 @@ export default function VideosTable() {
   const [globalFilter, setGlobalFilter] = useState('');
   const [showColumnModal, setShowColumnModal] = useState(false);
   const [copiedCellId, setCopiedCellId] = useState<string | null>(null);
+  const [pagination, setPagination] = useState({
+    pageIndex: 0,
+    pageSize: 25,
+  });
+
 
   useEffect(() => {
     if (Object.keys(columnVisibility).length) {
@@ -125,12 +131,15 @@ console.log(`[Render] ${cellId} → copiedCellId: ${copiedCellId} → isCopied: 
     state: {
       columnVisibility,
       globalFilter,
+      pagination,
     },
     onColumnVisibilityChange: setColumnVisibility,
     onGlobalFilterChange: setGlobalFilter,
+    onPaginationChange: setPagination,
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
+    manualPagination: false,
   });
 
   return (
