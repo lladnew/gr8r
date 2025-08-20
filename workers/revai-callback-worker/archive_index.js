@@ -196,68 +196,68 @@ try {
 } catch (err) {
   throw new Error(`R2 upload failed: ${err.message}`);
 }
-// Step 2.5: Upsert to DB1 (mirror Airtable fields)
-await logToGrafana(env, 'debug', 'Upserting DB1 record (revai-callback)', {
-  title,
-  job_id: id,
-  r2_transcript_url: r2TranscriptUrl
-});
+// // Step 2.5: Upsert to DB1 (mirror Airtable fields)
+// await logToGrafana(env, 'debug', 'Upserting DB1 record (revai-callback)', {
+//   title,
+//   job_id: id,
+//   r2_transcript_url: r2TranscriptUrl
+// });
 
-const db1Body = sanitizeForDB1({
-  title,
-  transcript_id: id,
-  r2_transcript_url: r2TranscriptUrl,
-  status: 'Pending Schedule',
-  ...(socialCopy?.hook && { social_copy_hook: socialCopy.hook }),
-  ...(socialCopy?.body && { social_copy_body: socialCopy.body }),
-  ...(socialCopy?.cta && {  social_copy_cta:  socialCopy.cta }),
-  ...(socialCopy?.hashtags && {
-    hashtags: Array.isArray(socialCopy.hashtags)
-      ? socialCopy.hashtags.join(' ')
-      : socialCopy.hashtags
-  })
-});
+// const db1Body = sanitizeForDB1({
+//   title,
+//   transcript_id: id,
+//   r2_transcript_url: r2TranscriptUrl,
+//   status: 'Pending Schedule',
+//   ...(socialCopy?.hook && { social_copy_hook: socialCopy.hook }),
+//   ...(socialCopy?.body && { social_copy_body: socialCopy.body }),
+//   ...(socialCopy?.cta && {  social_copy_cta:  socialCopy.cta }),
+//   ...(socialCopy?.hashtags && {
+//     hashtags: Array.isArray(socialCopy.hashtags)
+//       ? socialCopy.hashtags.join(' ')
+//       : socialCopy.hashtags
+//   })
+// });
 
-const db1Key = await getDB1InternalKey(env);
+// const db1Key = await getDB1InternalKey(env);
 
-// TEMP DEBUG: log the full key we are sending
-await logToGrafana(env, 'debug', 'DB1 key (sender) FULL', {
-  key: db1Key,
-  header: `Bearer ${db1Key}`
-});
+// // TEMP DEBUG: log the full key we are sending
+// await logToGrafana(env, 'debug', 'DB1 key (sender) FULL', {
+//   key: db1Key,
+//   header: `Bearer ${db1Key}`
+// });
 
-const db1Resp = await env.DB1.fetch('https://gr8r-db1-worker/db1/videos', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${db1Key}`
-  },
-  body: JSON.stringify(db1Body)
-});
+// const db1Resp = await env.DB1.fetch('https://gr8r-db1-worker/db1/videos', {
+//   method: 'POST',
+//   headers: {
+//     'Content-Type': 'application/json',
+//     'Authorization': `Bearer ${db1Key}`
+//   },
+//   body: JSON.stringify(db1Body)
+// });
 
-const db1Text = await db1Resp.text();
-let db1Data;
-try {
-  db1Data = JSON.parse(db1Text);
-} catch {
-  db1Data = { raw: db1Text };
-}
+// const db1Text = await db1Resp.text();
+// let db1Data;
+// try {
+//   db1Data = JSON.parse(db1Text);
+// } catch {
+//   db1Data = { raw: db1Text };
+// }
 
-if (!db1Resp.ok) {
-  await logToGrafana(env, 'error', 'DB1 video upsert failed (revai-callback)', {
-    title,
-    job_id: id,
-    db1Status: db1Resp.status,
-    db1ResponseText: db1Text
-  });
-  throw new Error(`DB1 update failed: ${db1Text}`);
-}
+// if (!db1Resp.ok) {
+//   await logToGrafana(env, 'error', 'DB1 video upsert failed (revai-callback)', {
+//     title,
+//     job_id: id,
+//     db1Status: db1Resp.status,
+//     db1ResponseText: db1Text
+//   });
+//   throw new Error(`DB1 update failed: ${db1Text}`);
+// }
 
-await logToGrafana(env, 'info', 'DB1 update successful (revai-callback)', {
-  title,
-  job_id: id,
-  db1Response: db1Data
-});
+// await logToGrafana(env, 'info', 'DB1 update successful (revai-callback)', {
+//   title,
+//   job_id: id,
+//   db1Response: db1Data
+// });
        
         // Step 3: Update Airtable
         await logToGrafana(env, 'debug', 'Updating Airtable record', { title, job_id: id });
@@ -360,24 +360,11 @@ function sanitizeForDB1(obj) {
 
 async function getDB1InternalKey(env) {
   if (CACHED_DB1_INTERNAL_KEY) return CACHED_DB1_INTERNAL_KEY;
-
-  const bound = env.DB1_INTERNAL_KEY;
-  let val;
-
-  if (typeof bound === 'string') {
-    // plain secret binding
-    val = bound;
-  } else if (bound && typeof bound.get === 'function') {
-    // Secrets Store binding
-    val = await bound.get();
-  } else {
-    throw new Error('DB1_INTERNAL_KEY binding missing or invalid');
+  const key = env.DB1_INTERNAL_KEY;
+  if (!key) {
+    await logToGrafana(env, 'error', 'Missing DB1_INTERNAL_KEY in env', { source: 'revai-callback-worker' });
+    throw new Error('DB1 internal key not configured');
   }
-
-  val = (val || '').trim();
-  if (!val) throw new Error('DB1_INTERNAL_KEY empty after resolution');
-
-  CACHED_DB1_INTERNAL_KEY = val;
-  return val;
+  CACHED_DB1_INTERNAL_KEY = key;
+  return key;
 }
-

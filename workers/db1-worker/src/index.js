@@ -67,22 +67,6 @@ async function checkInternalKey(request, env) {
     }
   }
 
-  // TEMP DEBUG: log the full provided vs stored key (you said you’ll rotate after)
-  await env.GRAFANA_WORKER.fetch("https://log", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      source: "gr8r-db1-worker",
-      level: "debug",
-      message: "Comparing DB1 keys (FULL)",
-      meta: {
-        provided: providedKey,
-        stored: cachedInternalKey
-      }
-    }),
-  });
-
-  // Compare last
   return providedKey === cachedInternalKey;
 }
 
