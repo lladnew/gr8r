@@ -1,5 +1,5 @@
 name = "gr8r-revai-callback-worker"
-main = "index.js"
+main = "dev_index.js"
 compatibility_date = "2025-06-24"
 account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
 
