@@ -1,4 +1,5 @@
 // v1.2.9 gr8r-revai-callback-worker adding DB1 UPSERT capabilities
+// v1.2.8 gr8r-revai-callback-worker
 // removing r2_Transcript_Url from line 164 and adding const at line 274
 // v1.2.7 gr8r-revai-callback-worker
 // line 206 moved to line 162... variables must be outside try block added r2_Transcript_Url variable
