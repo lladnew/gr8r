@@ -47,35 +47,44 @@ function base64urlToUint8Array(base64url) {
 	return Uint8Array.from(binary, (c) => c.charCodeAt(0));
 }
 
+let cachedInternalKey = null;
+
 // Check for internal Bearer key auth and added key caching for this worker
 async function checkInternalKey(request, env) {
-	const authHeader = request.headers.get("Authorization");
-	if (!authHeader?.startsWith("Bearer ")) return false;
+  const authHeader = request.headers.get("Authorization");
+  if (!authHeader?.startsWith("Bearer ")) return false;
 
-	// Only fetch secret once per instance
-	if (!cachedInternalKey) {
-		cachedInternalKey = await env.DB1_INTERNAL_KEY.get();
-	}
-	
-// TEMP DEBUG: log the full provided vs stored key
-await env.GRAFANA_WORKER.fetch("https://log", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    source: "gr8r-db1-worker",
-    level: "debug",
-    message: "Comparing DB1 keys (FULL)",
-    meta: {
-      provided: providedKey,
-      stored: cachedInternalKey
+  // DEFINE providedKey first
+  const providedKey = authHeader.slice(7).trim(); // Skip "Bearer ", trim in case of newline/space
+
+  // Only fetch secret once per instance
+  if (!cachedInternalKey) {
+    // If this binding is a Secret Store object, .get() returns the value.
+    // If it's a plain string secret, .get() won't exist — adjust as needed.
+    cachedInternalKey = await env.DB1_INTERNAL_KEY.get();
+    if (typeof cachedInternalKey === "string") {
+      cachedInternalKey = cachedInternalKey.trim();
     }
-  }),
-});
-	const providedKey = authHeader.slice(7); // Skip "Bearer "
-	return providedKey === cachedInternalKey;
-}
+  }
 
-let cachedInternalKey = null;
+  // TEMP DEBUG: log the full provided vs stored key (you said you’ll rotate after)
+  await env.GRAFANA_WORKER.fetch("https://log", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      source: "gr8r-db1-worker",
+      level: "debug",
+      message: "Comparing DB1 keys (FULL)",
+      meta: {
+        provided: providedKey,
+        stored: cachedInternalKey
+      }
+    }),
+  });
+
+  // Compare last
+  return providedKey === cachedInternalKey;
+}
 
 export default {
 	async fetch(request, env, ctx) {
