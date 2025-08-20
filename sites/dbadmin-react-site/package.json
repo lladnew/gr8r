@@ -10,6 +10,7 @@
     "dependencies": {
         "@radix-ui/react-tooltip": "^1.2.7",
         "@tanstack/react-table": "^8.21.3",
+        "lucide-react": "^0.540.0",
         "react": "^18.2.0",
         "react-dom": "^18.2.0"
     },

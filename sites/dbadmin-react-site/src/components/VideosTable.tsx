@@ -1,9 +1,5 @@
-//dbadmin-react-site/VideosTable.tsx v1.0.6 CHANGES (Batch4): 
-// - Reset to page 0 when globalFilter changes
-// - Added derived totals/page counts
-// - Added page size dropdown (10/25/50/100)
-// - Show "Page X of Y" with First/Last buttons
-// - Show "Showing A–B of N" total matching rows//dbadmin-react-site/src/components/VideosTable.tsx v1.0.5 CHANGES: revised to use static dev validation when running in local dev mode; adjusted use dependency for copied cells to not re-fetch the whole table
+//dbadmin-react-site/VideosTable.tsx v1.0.7 ADDED column sorting capabilities
+//dbadmin-react-site/VideosTable.tsx v1.0.6 ADDED proper pagination effects
 //dbadmin-react-site/VideosTable.tsx v1.0.5 CHANGES: revised to use static dev validation when running in local dev mode; adjusted use dependency for copied cells to not re-fetch the whole table
 //dbadmin-react-site/VideosTable.tsx v1.0.3 CHANGES: added pagination to show how many pages are availabe in UI
 //dbadmin-react-site/VideosTable.tsx v1.0.2 CHANGES: sticky column headers on verticle scroll and horizontal scrollbar always visible
@@ -16,12 +12,17 @@ import {
   getFilteredRowModel,
   flexRender,
   ColumnDef,
+  getSortedRowModel,
+  type SortingState,
 } from '@tanstack/react-table';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import ColumnSelectorModal from './ColumnSelectorModal';
 
 type RecordType = { [key: string]: any };
 const defaultVisible = ['title', 'status', 'scheduled_at'];
+// Server default is record_modified DESC; mirror that in the UI:
+const DEFAULT_SORT_COL = 'record_modified';
+const DEFAULT_SORT: SortingState = [{ id: DEFAULT_SORT_COL, desc: true }];
 
 export default function VideosTable() {
   const [data, setData] = useState<RecordType[]>([]);
@@ -31,6 +32,25 @@ export default function VideosTable() {
   const [showColumnModal, setShowColumnModal] = useState(false);
   const [copiedCellId, setCopiedCellId] = useState<string | null>(null);
   const copiedCellIdRef = useRef<string | null>(null);
+  const [sorting, setSorting] = useState<SortingState>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('sorting') || '[]');
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    if (!columns.length || !sorting.length) return;
+    const colIds = new Set(
+      columns.map(c => ((c as any).id as string) ?? ((c as any).accessorKey as string))
+    );
+    const [first, ...rest] = sorting;
+    if (first && !colIds.has(first.id)) {
+      setSorting(rest.length ? rest.filter(s => colIds.has(s.id)) : DEFAULT_SORT);
+    }
+  }, [columns, sorting]);
+
   useEffect(() => { copiedCellIdRef.current = copiedCellId; }, [copiedCellId]);
   const copyTimerRef = useRef<number | null>(null);
   const [pagination, setPagination] = useState({
@@ -62,21 +82,42 @@ export default function VideosTable() {
         const allKeys = Object.keys(sample);
         const savedVisibility = JSON.parse(localStorage.getItem('columnVisibility') || 'null');
 
-        const visibility = Object.fromEntries(
+        let visibility = Object.fromEntries(
           allKeys.map(k => [k, savedVisibility?.[k] ?? defaultVisible.includes(k)])
         );
+        // Ensure the default-sorted column is visible if present
+        if (allKeys.includes(DEFAULT_SORT_COL) && visibility[DEFAULT_SORT_COL] === false) {
+          visibility = { ...visibility, [DEFAULT_SORT_COL]: true };
+        }
         setColumnVisibility(visibility);
 
         setColumns(
           allKeys.map((key) => ({
             accessorKey: key,
-            header: key,
+            enableSorting: true,
+            header: ({ column }) => {
+              const dir = column.getIsSorted(); // 'asc' | 'desc' | false
+              return (
+                <button
+                  type="button"
+                  onClick={column.getToggleSortingHandler()}
+                  className="flex items-center gap-1 cursor-pointer select-none hover:underline"
+                  aria-sort={dir === 'asc' ? 'ascending' : dir === 'desc' ? 'descending' : 'none'}
+                  title="Click to sort"
+                >
+                  {key}
+                  <span className="inline-block w-3 text-xs">
+                    {dir === 'asc' ? '▲' : dir === 'desc' ? '▼' : ''}
+                  </span>
+                </button>
+              );
+            },
             cell: (info) => {
               const val = info.getValue();
               const cellId = `${info.row.id}-${key}`;
               const display = val?.toString() || '-';
               const isCopied = copiedCellIdRef.current === cellId;
-   
+
               return (
                 <Tooltip.Root delayDuration={200} open={isCopied || undefined}>
                   <Tooltip.Trigger asChild>
@@ -85,29 +126,24 @@ export default function VideosTable() {
                         isCopied ? 'bg-orange-100 transition duration-300' : ''
                       }`}
                       onClick={() => {
-                        console.log('📋 Copied cellId:', cellId);
                         navigator.clipboard.writeText(display);
-                        console.log("🔥 Setting copiedCellId to:", cellId);
-                        // Update ref immediately so this render sees the new value
                         copiedCellIdRef.current = cellId;
                         setCopiedCellId(cellId);
-                          // ADDED: clear any prior timer and start a fresh one
                         if (copyTimerRef.current) {
                           window.clearTimeout(copyTimerRef.current);
                         }
                         copyTimerRef.current = window.setTimeout(() => {
-                          console.log("⌛ Resetting copiedCellId");
                           setCopiedCellId(null);
                           copiedCellIdRef.current = null;
                           copyTimerRef.current = null;
-                        }, 1000); // ⏱ Match test case timing
+                        }, 1000);
                       }}
                     >
                       {display}
                     </div>
                   </Tooltip.Trigger>
-                    <Tooltip.Portal>
-                      <Tooltip.Content
+                  <Tooltip.Portal>
+                    <Tooltip.Content
                       side="top"
                       sideOffset={5}
                       className={`z-50 rounded-md px-2 py-1 text-sm max-w-[500px] break-words border text-black ${
@@ -133,15 +169,35 @@ export default function VideosTable() {
             },
           }))
         );
+       // Apply default only if initial sorting is empty
+        if (!sorting.length && allKeys.includes(DEFAULT_SORT_COL)) {
+          setSorting(DEFAULT_SORT);
+        }
       }
     })();
   }, []);
+        useEffect(() => {
+          const id = sorting[0]?.id as string | undefined;
+          if (!id || !columns.length) return;
 
-        // ADDED (Batch4): reset to page 0 whenever the global filter changes
+          const hasCol = columns.some((c) => (c as any).accessorKey === id || (c as any).id === id);
+          if (!hasCol) return;
+
+          setColumnVisibility((prev) => {
+            if (prev && prev[id] === false) {
+              return { ...prev, [id]: true };
+            }
+            return prev;
+          });
+        }, [sorting, columns]);
         useEffect(() => {
           setPagination((prev) => ({ ...prev, pageIndex: 0 }));
         }, [globalFilter]);
-        +  // ADDED: cleanup any pending copy timeout on unmount
+        useEffect(() => {
+          setPagination((prev) => ({ ...prev, pageIndex: 0 }));
+        }, [sorting]);
+        useEffect(() => localStorage.setItem('sorting', JSON.stringify(sorting)), [sorting]);
+        // ADDED: cleanup any pending copy timeout on unmount
         useEffect(() => {
             return () => {
               if (copyTimerRef.current) {
@@ -153,10 +209,13 @@ export default function VideosTable() {
     const reset = Object.fromEntries(
       columns.map(c => [c.accessorKey as string, defaultVisible.includes(c.accessorKey as string)])
     );
+    const activeSortId = (sorting[0]?.id as string) ?? DEFAULT_SORT_COL;
+    if (activeSortId in reset) {
+      reset[activeSortId] = true; // ensure the active sorted column is shown
+    }
     setColumnVisibility(reset);
     localStorage.setItem('columnVisibility', JSON.stringify(reset));
   };
-
   const table = useReactTable<RecordType>({
     data,
     columns,
@@ -164,13 +223,16 @@ export default function VideosTable() {
       columnVisibility,
       globalFilter,
       pagination,
+      sorting,
     },
     onColumnVisibilityChange: setColumnVisibility,
     onGlobalFilterChange: setGlobalFilter,
     onPaginationChange: setPagination,
+    onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
     manualPagination: false,
   });
 
@@ -181,6 +243,9 @@ export default function VideosTable() {
   const pageCount = table.getPageCount();
   const firstRow = totalRows === 0 ? 0 : pageIndex * pageSize + 1;
   const lastRow = totalRows === 0 ? 0 : Math.min(totalRows, (pageIndex + 1) * pageSize);
+  const currentSort = table.getState().sorting?.[0];
+  const sortedByLabel = currentSort?.id ?? DEFAULT_SORT_COL;
+  const sortedDirArrow = currentSort ? (currentSort.desc ? '↓' : '↑') : '↓';
 
   return (
     <Tooltip.Provider>
@@ -217,6 +282,19 @@ export default function VideosTable() {
         </select>
       </div>
 
+      <div className="ml-auto flex items-center gap-2">
+        <span className="text-xs border rounded-full px-2 py-0.5 bg-gray-50">
+          Sorted by <strong>{sortedByLabel}</strong> {sortedDirArrow}
+        </span>
+        <button
+          className="text-xs underline"
+          onClick={() => setSorting(DEFAULT_SORT)}
+          title="Reset to default sort"
+        >
+          ↺ Default sort
+        </button>
+      </div>
+
       <button
         className="border px-2 py-1 rounded text-sm"
         onClick={() => setShowColumnModal(true)}
@@ -225,7 +303,7 @@ export default function VideosTable() {
       </button>
 
       {/* ADDED (Batch4): totals (post-filter) */}
-      <div className="ml-auto text-sm">
+      <div className="text-sm">
         {totalRows === 0 ? '0 results' : `Showing ${firstRow}–${lastRow} of ${totalRows}`}
       </div>
     </div>
