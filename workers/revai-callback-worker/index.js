@@ -1,7 +1,7 @@
-// v1.2.8 gr8r-revai-callback-worker
-// removing r2Url from line 164 and adding const at line 274
+// v1.2.9 gr8r-revai-callback-worker adding DB1 UPSERT capabilities
+// removing r2_Transcript_Url from line 164 and adding const at line 274
 // v1.2.7 gr8r-revai-callback-worker
-// line 206 moved to line 162... variables must be outside try block added r2Url variable
+// line 206 moved to line 162... variables must be outside try block added r2_Transcript_Url variable
 // v1.2.6 gr8r-revai-callback-worker
 // Updated line 204 to add socialCopy as a variable to be reused
 // Updated line 251 removing const strict variable definition
@@ -21,20 +21,16 @@
 // Removed "env.ASSETS.fetch('r2/put') and replaced with direct evn.VIDEO_BUCKET.put(...)
 
 console.log('[revai-callback] Worker loaded'); // Logs when the Worker is initialized (cold start)
+// cache for DB1 internal key
+let CACHED_DB1_INTERNAL_KEY = null;
+
 export default {
   async fetch(request, env, ctx) {
-    console.log('[revai-callback] Handler started');// Logs on every request
     const url = new URL(request.url);
-    
-
     if (url.pathname === '/api/revai/callback' && request.method === 'POST') {
-      console.log('[revai-callback] Callback triggered');
-      await logToGrafana(env, 'debug', 'Callback triggered');
+      await logToGrafana(env, 'debug', 'Revai-callback triggered');
 
 let rawBody, body;
-
-// NEW: Verify that tail log starts
-console.log('[revai-callback] Top of handler');
 
 // Step 1: Try to get raw text safely
 try {
@@ -42,7 +38,6 @@ try {
   console.log('[revai-callback] Raw body successfully read'); // <== NEW marker
   console.log('[revai-callback] Raw body:', rawBody);
 } catch (e) {
-  console.error('[revai-callback] Failed to read raw body:', e.message);
   await logToGrafana(env, 'error', 'Failed to read raw body', {
     error: e.message
   });
@@ -52,9 +47,7 @@ try {
 // Step 2: Try to parse JSON
 try {
   body = JSON.parse(rawBody);
-  console.log('[revai-callback] Parsed body:', body);
 } catch (e) {
-  console.error('[revai-callback] Failed to parse body:', e.message);
   await logToGrafana(env, 'error', 'Failed to parse JSON body', {
     rawBody,
     error: e.message
@@ -75,7 +68,7 @@ try {
         status,
         title
       });
-let fetchResp, fetchText, socialCopy; //variables set for later use that could change
+let fetchResp, fetchText, socialCopy; 
       if (status !== 'transcribed') {
         return new Response('Callback ignored: status not transcribed', { status: 200 });
       }
@@ -95,7 +88,6 @@ let fetchResp, fetchText, socialCopy; //variables set for later use that could c
 
        if (!checkResp.ok) {
   const errorText = await checkResp.text();
-  console.error('[revai-callback] Airtable fetch failed:', checkResp.status, errorText);
   await logToGrafana(env, 'error', 'Airtable fetch failed', {
     job_id: id,
     status: checkResp.status,
@@ -117,7 +109,6 @@ if (alreadyDone) {
 }
 
 // Step 1: Fetch transcript text (plain text)
-console.log('[revai-callback] Fetch body for REVAIFETCH:', JSON.stringify({ job_id: id }));
 await logToGrafana(env, 'debug', 'Sending request to REVAIFETCH', {
   job_id: id,
   fetch_payload: { job_id: id }
@@ -130,7 +121,6 @@ try {
     body: JSON.stringify({ job_id: id })
   });
   fetchText = await fetchResp.text();
-  console.log('[revai-callback] REVAIFETCH response:', fetchResp.status, fetchText);
   } catch (err) {
   console.error('[revai-callback] REVAIFETCH fetch error:', err.message);
   await logToGrafana(env, 'error', 'REVAIFETCH fetch threw error', {
@@ -158,7 +148,6 @@ try {
 
   if (!socialCopyResponse.ok) {
     const errText = await socialCopyResponse.text();
-    console.error('[revai-callback] ❌ SocialCopy worker failed:', socialCopyResponse.status, errText);
     await logToGrafana(env, 'error', 'SocialCopy worker failed', {
       status: socialCopyResponse.status,
       response: errText,
@@ -185,7 +174,7 @@ try {
        // Step 2: Upload transcript + Social Copy to R2
 const sanitizedTitle = title.replace(/[^a-zA-Z0-9 _-]/g, "").replace(/\s+/g, "_");
 const r2Key = `transcripts/${sanitizedTitle}.txt`;
-const r2Url = 'https://videos.gr8r.com/' + r2Key;
+const r2TranscriptUrl = 'https://videos.gr8r.com/' + r2Key;
 
 let fullTextToUpload = fetchText;
 
@@ -206,6 +195,62 @@ try {
 } catch (err) {
   throw new Error(`R2 upload failed: ${err.message}`);
 }
+// Step 2.5: Upsert to DB1 (mirror Airtable fields)
+await logToGrafana(env, 'debug', 'Upserting DB1 record (revai-callback)', {
+  title,
+  job_id: id,
+  r2_transcript_url: r2TranscriptUrl
+});
+
+const db1Body = sanitizeForDB1({
+  title,
+  transcript_id: id,
+  r2_transcript_url: r2TranscriptUrl,
+  status: 'Pending Schedule',
+  ...(socialCopy?.hook && { social_copy_hook: socialCopy.hook }),
+  ...(socialCopy?.body && { social_copy_body: socialCopy.body }),
+  ...(socialCopy?.cta && {  social_copy_cta:  socialCopy.cta }),
+  ...(socialCopy?.hashtags && {
+    hashtags: Array.isArray(socialCopy.hashtags)
+      ? socialCopy.hashtags.join(' ')
+      : socialCopy.hashtags
+  })
+});
+
+const db1Key = await getDB1InternalKey(env);
+
+const db1Resp = await env.DB1.fetch('https://gr8r-db1-worker/db1/videos', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${db1Key}`
+  },
+  body: JSON.stringify(db1Body)
+});
+
+const db1Text = await db1Resp.text();
+let db1Data;
+try {
+  db1Data = JSON.parse(db1Text);
+} catch {
+  db1Data = { raw: db1Text };
+}
+
+if (!db1Resp.ok) {
+  await logToGrafana(env, 'error', 'DB1 video upsert failed (revai-callback)', {
+    title,
+    job_id: id,
+    db1Status: db1Resp.status,
+    db1ResponseText: db1Text
+  });
+  throw new Error(`DB1 update failed: ${db1Text}`);
+}
+
+await logToGrafana(env, 'info', 'DB1 update successful (revai-callback)', {
+  title,
+  job_id: id,
+  db1Response: db1Data
+});
        
         // Step 3: Update Airtable
         await logToGrafana(env, 'debug', 'Updating Airtable record', { title, job_id: id });
@@ -218,7 +263,7 @@ try {
             matchField: 'Transcript ID',
             matchValue: id,
             fields: {
-  'R2 Transcript URL': r2Url,
+  'R2 Transcript URL': r2TranscriptUrl,
   Status: 'Pending Schedule',
   ...(socialCopy?.hook && { 'Social Copy Hook': socialCopy.hook }),
   ...(socialCopy?.body && { 'Social Copy Body': socialCopy.body }),
@@ -233,7 +278,7 @@ if (!airtableResp.ok) {
   console.error('[revai-callback] Airtable update failed:', airtableResp.status, errorText);
   await logToGrafana(env, 'error', 'Airtable update failed', {
     title,
-    r2_url: r2Url,
+    r2_transcript_url: r2TranscriptUrl,
     job_id: id,
     status: airtableResp.status,
     response: errorText
@@ -241,7 +286,7 @@ if (!airtableResp.ok) {
   throw new Error(`Airtable update failed: ${airtableResp.status} - ${errorText}`);
 }
 
-        await logToGrafana(env, 'info', 'Airtable update successful', { title, r2_url: r2Url });
+        await logToGrafana(env, 'info', 'Airtable update successful', { title, r2_transcript_url: r2TranscriptUrl });
 
         return new Response(JSON.stringify({ success: true }), {
           status: 200,
@@ -294,4 +339,25 @@ async function logToGrafana(env, level, message, meta = {}) {
   } catch (err) {
     console.error('📛 Logger failed:', err.message, '📤 Original payload:', payload);
   }
+}
+function sanitizeForDB1(obj) {
+  // Remove only undefined, null, and empty strings. Keep Dates and 0/false.
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined || v === null) continue;
+    if (typeof v === 'string' && v.trim() === '') continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+async function getDB1InternalKey(env) {
+  if (CACHED_DB1_INTERNAL_KEY) return CACHED_DB1_INTERNAL_KEY;
+  const key = env.DB1_INTERNAL_KEY;
+  if (!key) {
+    await logToGrafana(env, 'error', 'Missing DB1_INTERNAL_KEY in env', { source: 'revai-callback-worker' });
+    throw new Error('DB1 internal key not configured');
+  }
+  CACHED_DB1_INTERNAL_KEY = key;
+  return key;
 }

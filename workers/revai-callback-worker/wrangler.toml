@@ -27,6 +27,15 @@ service = "gr8r-airtable-worker"
 binding = "ASSETS"
 service = "gr8r-assets-worker"
 
+[[services]]
+binding = "DB1"
+service = "gr8r-db1-worker"
+
+[[secrets_store_secrets]]
+binding = "DB1_INTERNAL_KEY"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "DB1_INTERNAL_KEY"
+
 [[routes]]
 pattern = "callback.gr8r.com/*"
 zone_name = "gr8r.com"
