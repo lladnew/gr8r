@@ -220,6 +220,12 @@ const db1Body = sanitizeForDB1({
 
 const db1Key = await getDB1InternalKey(env);
 
+await logToGrafana(env, 'debug', 'DB1 key sanity', { //DEBUG
+  hasKey: !!db1Key, //DEBUG
+  keyLen: db1Key ? db1Key.length : 0  //DEBUG
+  // no actual key logged
+}); //DEBUG
+
 const db1Resp = await env.DB1.fetch('https://gr8r-db1-worker/db1/videos', {
   method: 'POST',
   headers: {
