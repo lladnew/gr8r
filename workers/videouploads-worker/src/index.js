@@ -1,4 +1,4 @@
-// v1.3.9 gr8r-videouploads-worker commenting out DB1 sections so this will work again temporarily
+// v1.4.0 gr8r-videouploads-worker fixes made going live with D1 UPSERT code
 // v1.3.8 gr8r-videouploads-worker added key caching function and updated both DB1 calls to utilize
 // ADDED: utilization of sanitize function for 2nd DB1 call
 // v1.3.7 gr8r-videouploads-worker revised santizeForDB1 function for null and empty values
@@ -102,51 +102,51 @@ export default {
           db1response: db1Data
         });
 
-//         // DB1 update to mirror Airtable
+        // DB1 update to mirror Airtable
 
-//         const db1Body = sanitizeForDB1({
-//           title,
-//           video_type: videoType,
-//           scheduled_at: scheduleDateTime,
-//           r2_url: publicUrl,
-//           content_type: contentType,
-//           video_filename: filename,
-//           file_size_bytes: contentLength,
-//           status: "Working"
-//         });
+        const db1Body = sanitizeForDB1({
+          title,
+          video_type: videoType,
+          scheduled_at: scheduleDateTime,
+          r2_url: publicUrl,
+          content_type: contentType,
+          video_filename: filename,
+          file_size_bytes: contentLength,
+          status: "Working"
+        });
 
-// console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
-//         const db1Key = await getDB1InternalKey(env);
-//         const db1Response = await env.DB1.fetch("https://gr8r-db1-worker/db1/videos", {
-//           method: "POST",
-//           headers: {
-//             "Content-Type": "application/json",
-//             "Authorization": `Bearer ${db1Key}`,
-//           },
-//           body: JSON.stringify(db1Body),
-//         });
+console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
+        const db1Key = await getDB1InternalKey(env);
+        const db1Response = await env.DB1.fetch("https://gr8r-db1-worker/db1/videos", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${db1Key}`,
+          },
+          body: JSON.stringify(db1Body),
+        });
 
-//                 const text = await db1Response.text();
+                const text = await db1Response.text();
                 
-//                 try {
-//                   db1Data = JSON.parse(text);
-//                 } catch {
-//                   db1Data = { raw: text };
-//                 }
+                try {
+                  db1Data = JSON.parse(text);
+                } catch {
+                  db1Data = { raw: text };
+                }
 
-//         if (!db1Response.ok) {
-//           await logToGrafana(env, "error", "DB1 video upsert failed", {
-//             title,
-//             db1Status: db1Response.status,
-//             db1ResponseText: text
-//           });
-//           throw new Error(`DB1 update failed: ${text}`);
-//         }
+        if (!db1Response.ok) {
+          await logToGrafana(env, "error", "DB1 video upsert failed", {
+            title,
+            db1Status: db1Response.status,
+            db1ResponseText: text
+          });
+          throw new Error(`DB1 update failed: ${text}`);
+        }
 
-//         await logToGrafana(env, "info", "DB1 New Video Entry", {
-//           title,
-//           db1Response: db1Data
-//         });
+        await logToGrafana(env, "info", "DB1 New Video Entry", {
+          title,
+          db1Response: db1Data
+        });
 
 
         // Rev.ai logic unchanged
@@ -198,57 +198,57 @@ export default {
         });
 
         // DB1 follow-up update for Rev.ai job
-//       try {
-//       const db1FollowupBody = sanitizeForDB1({
-//          title,
-//          status: "Pending Transcription",
-//          transcript_id: revaiJson.id
-//          });
-//
-//          const db1FollowupResponse = await env.DB1.fetch("https://gr8r-db1-worker/db1/videos", {
-//         method: "POST",
-//          headers: {
-//            "Content-Type": "application/json",
-//            "Authorization": `Bearer ${db1Key}` // Reuse from earlier
-//          },
-//          body: JSON.stringify(db1FollowupBody)
-//          });
-//
-//          const text = await db1FollowupResponse.text();
-//          let db1FollowupData = null;
-//
-//        try {
-//          db1FollowupData = JSON.parse(text);
-//        } catch {
-//          db1FollowupData = { raw: text };
-//        }
+        try {
+         const db1FollowupBody = sanitizeForDB1({
+          title,
+          status: "Pending Transcription",
+          transcript_id: revaiJson.id
+          });
 
-//        if (!db1FollowupResponse.ok) {
-//          await logToGrafana(env, "error", "DB1 transcript update failed", {
-//            title,
-//            revaiJobId: revaiJson.id,
-//            db1Status: db1FollowupResponse.status,
-//            db1ResponseText: text
-//          });
-//          throw new Error(`DB1 transcript update failed: ${text}`);
-//        }
-//
-//        await logToGrafana(env, "info", "DB1 Transcript ID logged", {
-//          title,
-//          revaiJobId: revaiJson.id,
-//          db1Response: db1FollowupData
-//        });
+          const db1FollowupResponse = await env.DB1.fetch("https://gr8r-db1-worker/db1/videos", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${db1Key}` // Reuse from earlier
+          },
+          body: JSON.stringify(db1FollowupBody)
+          });
+
+          const text = await db1FollowupResponse.text();
+          let db1FollowupData = null;
+
+        try {
+          db1FollowupData = JSON.parse(text);
+        } catch {
+          db1FollowupData = { raw: text };
+        }
+
+        if (!db1FollowupResponse.ok) {
+          await logToGrafana(env, "error", "DB1 transcript update failed", {
+            title,
+            revaiJobId: revaiJson.id,
+            db1Status: db1FollowupResponse.status,
+            db1ResponseText: text
+          });
+          throw new Error(`DB1 transcript update failed: ${text}`);
+        }
+
+        await logToGrafana(env, "info", "DB1 Transcript ID logged", {
+          title,
+          revaiJobId: revaiJson.id,
+          db1Response: db1FollowupData
+        });
         
 
-//                } catch (err) {
-//                  await logToGrafana(env, "error", "DB1 transcript update exception", {
-//                    title,
-//                    revaiJobId: revaiJson.id,
-//                    error: err.message,
-//                    stack: err.stack
-//                  });
-//                  throw err;
-//                }
+                } catch (err) {
+                  await logToGrafana(env, "error", "DB1 transcript update exception", {
+                    title,
+                    revaiJobId: revaiJson.id,
+                    error: err.message,
+                    stack: err.stack
+                  });
+                  throw err;
+                }
 
 
         // RETAINED: Final response to Apple Shortcut
