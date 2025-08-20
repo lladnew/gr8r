@@ -1,7 +1,13 @@
-//dbadmin-react-site/src/components/VideosTable.tsx v1.0.5 CHANGES: revised to use static dev validation when running in local dev mode; adjusted use dependency for copied cells to not re-fetch the whole table
-//dbadmin-react-site/src/components/VideosTable.tsx v1.0.3 CHANGES: added pagination to show how many pages are availabe in UI
-//dbadmin-react-site/src/components/VideosTable.tsx v1.0.2 CHANGES: sticky column headers on verticle scroll and horizontal scrollbar always visible
-//dbadmin-react-site/src/components/VideosTable.tsx v1.0.1
+//dbadmin-react-site/VideosTable.tsx v1.0.6 CHANGES (Batch4): 
+// - Reset to page 0 when globalFilter changes
+// - Added derived totals/page counts
+// - Added page size dropdown (10/25/50/100)
+// - Show "Page X of Y" with First/Last buttons
+// - Show "Showing A–B of N" total matching rows//dbadmin-react-site/src/components/VideosTable.tsx v1.0.5 CHANGES: revised to use static dev validation when running in local dev mode; adjusted use dependency for copied cells to not re-fetch the whole table
+//dbadmin-react-site/VideosTable.tsx v1.0.5 CHANGES: revised to use static dev validation when running in local dev mode; adjusted use dependency for copied cells to not re-fetch the whole table
+//dbadmin-react-site/VideosTable.tsx v1.0.3 CHANGES: added pagination to show how many pages are availabe in UI
+//dbadmin-react-site/VideosTable.tsx v1.0.2 CHANGES: sticky column headers on verticle scroll and horizontal scrollbar always visible
+//dbadmin-react-site/VideosTable.tsx v1.0.1
 import React, { useEffect, useState, useRef } from 'react';
 import {
   useReactTable,
@@ -26,6 +32,7 @@ export default function VideosTable() {
   const [copiedCellId, setCopiedCellId] = useState<string | null>(null);
   const copiedCellIdRef = useRef<string | null>(null);
   useEffect(() => { copiedCellIdRef.current = copiedCellId; }, [copiedCellId]);
+  const copyTimerRef = useRef<number | null>(null);
   const [pagination, setPagination] = useState({
     pageIndex: 0,
     pageSize: 25,
@@ -48,7 +55,7 @@ export default function VideosTable() {
 
 
 
-         const records = await res.json();
+        const records = await res.json();
       if (records.length) {
         setData(records);
         const sample = records[0];
@@ -69,11 +76,7 @@ export default function VideosTable() {
               const cellId = `${info.row.id}-${key}`;
               const display = val?.toString() || '-';
               const isCopied = copiedCellIdRef.current === cellId;
-            
-//temp commentout this line  const isCopied = true;
-// 🔍 Log on every render
-console.log(`[Render] ${cellId} → copiedCellId: ${copiedCellIdRef.current} → isCopied: ${isCopied}`);
-
+   
               return (
                 <Tooltip.Root delayDuration={200} open={isCopied || undefined}>
                   <Tooltip.Trigger asChild>
@@ -85,10 +88,18 @@ console.log(`[Render] ${cellId} → copiedCellId: ${copiedCellIdRef.current} →
                         console.log('📋 Copied cellId:', cellId);
                         navigator.clipboard.writeText(display);
                         console.log("🔥 Setting copiedCellId to:", cellId);
+                        // Update ref immediately so this render sees the new value
+                        copiedCellIdRef.current = cellId;
                         setCopiedCellId(cellId);
-                        setTimeout(() => {
+                          // ADDED: clear any prior timer and start a fresh one
+                        if (copyTimerRef.current) {
+                          window.clearTimeout(copyTimerRef.current);
+                        }
+                        copyTimerRef.current = window.setTimeout(() => {
                           console.log("⌛ Resetting copiedCellId");
                           setCopiedCellId(null);
+                          copiedCellIdRef.current = null;
+                          copyTimerRef.current = null;
                         }, 1000); // ⏱ Match test case timing
                       }}
                     >
@@ -126,6 +137,18 @@ console.log(`[Render] ${cellId} → copiedCellId: ${copiedCellIdRef.current} →
     })();
   }, []);
 
+        // ADDED (Batch4): reset to page 0 whenever the global filter changes
+        useEffect(() => {
+          setPagination((prev) => ({ ...prev, pageIndex: 0 }));
+        }, [globalFilter]);
+        +  // ADDED: cleanup any pending copy timeout on unmount
+        useEffect(() => {
+            return () => {
+              if (copyTimerRef.current) {
+                window.clearTimeout(copyTimerRef.current);
+              }
+            };
+          }, []);
   const handleResetColumns = () => {
     const reset = Object.fromEntries(
       columns.map(c => [c.accessorKey as string, defaultVisible.includes(c.accessorKey as string)])
@@ -151,6 +174,14 @@ console.log(`[Render] ${cellId} → copiedCellId: ${copiedCellIdRef.current} →
     manualPagination: false,
   });
 
+  // ADDED (Batch4): derived display values for totals/page counts
+  const totalRows = table.getFilteredRowModel().rows.length;
+  const pageIndex = table.getState().pagination.pageIndex;
+  const pageSize = table.getState().pagination.pageSize;
+  const pageCount = table.getPageCount();
+  const firstRow = totalRows === 0 ? 0 : pageIndex * pageSize + 1;
+  const lastRow = totalRows === 0 ? 0 : Math.min(totalRows, (pageIndex + 1) * pageSize);
+
   return (
     <Tooltip.Provider>
       <div className="overflow-x-auto">
@@ -162,21 +193,42 @@ console.log(`[Render] ${cellId} → copiedCellId: ${copiedCellIdRef.current} →
           title="Edit Visible Columns"
         />
 
-        <div className="mb-2 flex items-center gap-4">
-          <input
-            type="text"
-            className="border px-2 py-1 rounded"
-            placeholder="Search..."
-            value={globalFilter ?? ''}
-            onChange={(e) => setGlobalFilter(e.target.value)}
-          />
-          <button
-            className="border px-2 py-1 rounded text-sm"
-            onClick={() => setShowColumnModal(true)}
-          >
-            Change Viewable Fields
-          </button>
-        </div>
+      <div className="mb-2 flex flex-wrap items-center gap-4">
+        <input
+          type="text"
+          className="border px-2 py-1 rounded"
+          placeholder="Search..."
+          value={globalFilter ?? ''}
+          onChange={(e) => setGlobalFilter(e.target.value)}
+        />
+
+      {/* ADDED (Batch4): page size dropdown */}
+      <div className="flex items-center gap-2">
+        <label htmlFor="pageSize" className="text-sm">Rows per page</label>
+        <select
+          id="pageSize"
+          className="border px-2 py-1 rounded text-sm"
+          value={pageSize}
+          onChange={(e) => table.setPageSize(Number(e.target.value))}
+        >
+          {[10, 25, 50, 100].map(size => (
+            <option key={size} value={size}>{size}</option>
+          ))}
+        </select>
+      </div>
+
+      <button
+        className="border px-2 py-1 rounded text-sm"
+        onClick={() => setShowColumnModal(true)}
+      >
+        Change Viewable Fields
+      </button>
+
+      {/* ADDED (Batch4): totals (post-filter) */}
+      <div className="ml-auto text-sm">
+        {totalRows === 0 ? '0 results' : `Showing ${firstRow}–${lastRow} of ${totalRows}`}
+      </div>
+    </div>
 
         <div className="overflow-auto max-h-[calc(100vh-200px)]">
           <table className="min-w-[1000px] divide-y divide-gray-300 text-sm table-fixed">
@@ -211,22 +263,41 @@ console.log(`[Render] ${cellId} → copiedCellId: ${copiedCellIdRef.current} →
         </table>
         </div>
 
-        <div className="mt-4 flex items-center gap-4">
-          <button
-            className="px-2 py-1 border rounded"
-            onClick={() => table.previousPage()}
-            disabled={!table.getCanPreviousPage()}
-          >
-            Previous
-          </button>
-          <span>Page {table.getState().pagination.pageIndex + 1}</span>
-          <button
-            className="px-2 py-1 border rounded"
-            onClick={() => table.nextPage()}
-            disabled={!table.getCanNextPage()}
-          >
-            Next
-          </button>
+        <div className="mt-4 flex flex-wrap items-center gap-4">
+          <div className="text-sm">
+            Page {pageCount === 0 ? 0 : pageIndex + 1} of {pageCount}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              className="px-2 py-1 border rounded"
+              onClick={() => table.setPageIndex(0)}
+              disabled={!table.getCanPreviousPage()}
+            >
+              ⏮ First
+            </button>
+            <button
+              className="px-2 py-1 border rounded"
+              onClick={() => table.previousPage()}
+              disabled={!table.getCanPreviousPage()}
+            >
+              Previous
+            </button>
+            <button
+              className="px-2 py-1 border rounded"
+              onClick={() => table.nextPage()}
+              disabled={!table.getCanNextPage()}
+            >
+              Next
+            </button>
+            <button
+              className="px-2 py-1 border rounded"
+              onClick={() => table.setPageIndex(pageCount - 1)}
+              disabled={!table.getCanNextPage()}
+            >
+              Last ⏭
+            </button>
+          </div>
         </div>
       </div>
     </Tooltip.Provider>
