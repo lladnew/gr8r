@@ -1,3 +1,4 @@
+// v1.2.0 gr8r-grafana-worker switching to Secrets Store for secrets and using new getSecret function module in lib/secrets.js
 // v1.0.9 gr8r-grafana-worker
 // - ADDED: Flattens top-level primitive `meta` fields into Loki labels for dashboard filtering
 // - ADDED: Embeds full `meta` object in the log message (as JSON) for postmortem inspection
@@ -8,20 +9,13 @@
 //RETAINED verbose logging for incoming requests and Loki response
 //MAINTAINED fallback source/service label defaults for Grafana visibility
 
+// new getSecret function module
+import { getSecret } from "../../../lib/secrets.js";
+
 export default {
   async fetch(request, env) {
     console.log("📥 Incoming request to Grafana Worker");
-  // ADDED: simple dump route (REMOVE after you verify)
-    const url = new URL(request.url);
-    if (url.pathname === "/dump") {
-      console.log("=== DEBUG SECRETS DUMP (TEMPORARY) ===");
-      console.log("GRAFANA_LOKI_URL:", env.GRAFANA_LOKI_URL);
-      console.log("GRAFANA_USERNAME:", env.GRAFANA_USERNAME);
-      console.log("GRAFANA_API_KEY:", env.GRAFANA_API_KEY);
-      console.log("======================================");
-      return new Response("Secrets dumped to console log", { status: 200 });
-    }
-    
+
     if (request.method !== "POST") {
       return new Response("Method not allowed", { status: 405 });
     }
@@ -61,9 +55,13 @@ export default {
         values: [[`${timestamp}`, JSON.stringify(messagePayload)]]
       };
 
-      const lokiUrl = env.GRAFANA_LOKI_URL;
-      const username = env.GRAFANA_USERNAME;
-      const apiKey = env.GRAFANA_API_KEY;
+      //resolve secrets from CF Secrets Store (cached 10 minutes by helper)
+      const [lokiURL, username, apiKey] = await Promise.all([
+        getSecret(env, "GRAFANACLOUD_GR8R_LOGS_URL"),
+        getSecret(env, "GRAFANACLOUD_GR8R_LOGS_USER"),
+        getSecret(env, "GRAFANACLOUD_GR8R_LOGS_KEY"),
+      ]);
+
       const authHeader = 'Basic ' + btoa(`${username}:${apiKey}`);
 
       const payload = JSON.stringify({ streams: [stream] });
