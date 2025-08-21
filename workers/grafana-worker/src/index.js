@@ -56,7 +56,7 @@ export default {
       };
 
       //resolve secrets from CF Secrets Store (cached 10 minutes by helper)
-      const [lokiURL, username, apiKey] = await Promise.all([
+      const [lokiUrl, username, apiKey] = await Promise.all([
         getSecret(env, "GRAFANACLOUD_GR8R_LOGS_URL"),
         getSecret(env, "GRAFANACLOUD_GR8R_LOGS_USER"),
         getSecret(env, "GRAFANACLOUD_GR8R_LOGS_KEY"),
