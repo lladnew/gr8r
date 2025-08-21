@@ -1,7 +1,7 @@
 name = "gr8r-socialcopy-worker"
 type = "javascript"
 compatibility_date = "2024-07-08"
-main = "index.js"
+main = "src/index.js"
 account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
 
 # No secrets declared here — use the Cloudflare dashboard to add:

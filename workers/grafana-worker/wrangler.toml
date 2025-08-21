@@ -1,5 +1,5 @@
 name = "gr8r-grafana-worker"
-main = "index.js"
+main = "src/index.js"
 compatibility_date = "2025-06-12"
 account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
 
