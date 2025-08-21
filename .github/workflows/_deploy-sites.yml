@@ -30,8 +30,8 @@ jobs:
           echo "Branch: ${{ github.ref }}"
           echo "Commit: ${{ github.sha }}"
           echo "workingDirectory = ${{ inputs.workingDirectory }}"
-          echo "buildDirectory = ${{ inputs.buildDirectory }}"
-          echo "projectName     = ${{ inputs.projectName }}"
+          echo "buildDirectory   = ${{ inputs.buildDirectory }}"
+          echo "projectName      = ${{ inputs.projectName }}"
 
       - name: 🧪 Debug file paths
         run: |
@@ -54,8 +54,14 @@ jobs:
           echo "--- 📄 Looking for package.json ---"
           cat "$BUILD_DIR/package.json" || echo "❌ package.json not found!"
 
-      - name: Install Wrangler
-        run: npm install -g wrangler@4.26.0
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install repo deps (pinned wrangler)
+        run: npm ci
 
       - name: Build site
         run: |
@@ -68,17 +74,17 @@ jobs:
           cd "$BUILD_DIR"
 
           if [ -f package.json ]; then
-            npm install || true
+            npm ci || npm install
             npm run build
           else
             echo "⚠️ No package.json found in $BUILD_DIR. Skipping build."
           fi
 
-      - name: Deploy to Cloudflare Pages
+      - name: Deploy to Cloudflare Pages (repo-pinned via npx)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 6a22f9b8ad27ffcc9719dd53a78bcedf
         run: |
-          export CLOUDFLARE_API_TOKEN=${{ secrets.CF_API_TOKEN }}
-          export CLOUDFLARE_ACCOUNT_ID=6a22f9b8ad27ffcc9719dd53a78bcedf
-
           BUILD_DIR="${{ inputs.buildDirectory }}"
           if [ -z "$BUILD_DIR" ]; then
             BUILD_DIR="${{ inputs.workingDirectory }}"
@@ -87,4 +93,4 @@ jobs:
           echo "📁 Final dist path: $BUILD_DIR/dist"
           ls -la "$BUILD_DIR/dist" || exit 1
 
-          wrangler pages deploy "$BUILD_DIR/dist" --project-name=${{ inputs.projectName }} --commit-dirty=true
+          npx wrangler pages deploy "$BUILD_DIR/dist" --project-name="${{ inputs.projectName }}" --commit-dirty=true

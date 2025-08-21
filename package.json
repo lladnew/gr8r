@@ -1,0 +1,29 @@
+{
+  "name": "gr8r",
+  "version": "1.0.0",
+  "private": true,
+  "description": "gr8r Workers and Sites (repo-pinned Wrangler)",
+  "devDependencies": {
+    "wrangler": "4.32.0"
+  },
+  "main": "index.js",
+  "directories": {
+    "lib": "lib"
+  },
+  "scripts": {
+    "wrangler:version": "wrangler --version",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lladnew/gr8r.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/lladnew/gr8r/issues"
+  },
+  "homepage": "https://github.com/lladnew/gr8r#readme"
+}
+

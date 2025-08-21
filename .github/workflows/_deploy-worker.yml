@@ -13,7 +13,6 @@ on:
       CF_API_TOKEN:
         required: true
 
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -28,23 +27,29 @@ jobs:
           echo "Branch: ${{ github.ref }}"
           echo "Commit: ${{ github.sha }}"
           echo "Deploying ${{ inputs.workerName }} Worker..."
+          echo "Using config: ${{ inputs.workingDirectory }}/wrangler.toml"
 
-      - name: Set up Node & install Wrangler
-        run: npm install -g wrangler@4.26.0
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
 
-      - name: Deploy Worker with Wrangler
-        working-directory: ${{ inputs.workingDirectory }}
-        run: |
-          export CLOUDFLARE_API_TOKEN=${{ secrets.CF_API_TOKEN }}
-          wrangler deploy
+      - name: Install repo deps (pinned wrangler)
+        run: npm ci
+
+      - name: Deploy Worker with Wrangler (repo-pinned via npx)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: npx wrangler deploy --config "${{ inputs.workingDirectory }}/wrangler.toml"
 
       - name: Dump directory contents (on failure)
         if: failure()
         run: |
           echo "Listing contents of ${{ inputs.workingDirectory }}:"
-          ls -la ${{ inputs.workingDirectory }}
+          ls -la "${{ inputs.workingDirectory }}"
           echo "--- wrangler.toml ---"
-          cat ${{ inputs.workingDirectory }}/wrangler.toml || echo "Missing wrangler.toml"
+          cat "${{ inputs.workingDirectory }}/wrangler.toml" || echo "Missing wrangler.toml"
 
       - name: Output Wrangler error log (on failure)
         if: failure()
