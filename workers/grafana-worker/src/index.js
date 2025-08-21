@@ -11,7 +11,17 @@
 export default {
   async fetch(request, env) {
     console.log("📥 Incoming request to Grafana Worker");
-
+  // ADDED: simple dump route (REMOVE after you verify)
+    const url = new URL(request.url);
+    if (url.pathname === "/dump") {
+      console.log("=== DEBUG SECRETS DUMP (TEMPORARY) ===");
+      console.log("GRAFANA_LOKI_URL:", env.GRAFANA_LOKI_URL);
+      console.log("GRAFANA_USERNAME:", env.GRAFANA_USERNAME);
+      console.log("GRAFANA_API_KEY:", env.GRAFANA_API_KEY);
+      console.log("======================================");
+      return new Response("Secrets dumped to console log", { status: 200 });
+    }
+    
     if (request.method !== "POST") {
       return new Response("Method not allowed", { status: 405 });
     }
