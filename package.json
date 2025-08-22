@@ -4,6 +4,7 @@
   "private": true,
   "description": "gr8r Workers and Sites (repo-pinned Wrangler)",
   "devDependencies": {
+    "sharp": "^0.34.3",
     "wrangler": "4.32.0"
   },
   "main": "index.js",
@@ -26,4 +27,3 @@
   },
   "homepage": "https://github.com/lladnew/gr8r#readme"
 }
-
