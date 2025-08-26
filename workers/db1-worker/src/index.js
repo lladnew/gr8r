@@ -1,3 +1,4 @@
+//gr8r-db1-worker v1.2.9 ADD: support for force clearing certain database cells: scheduled_at, social_copy_hook, social_copy_body, social_copy_cta, and hashtags
 //gr8r-db1-worker v1.2.8 modified origin for CORS checks - fighting with dev browser issues
 //gr8r-db1-worker v1.2.7 modified GET to return All sorted by most recent record_modified
 //gr8r-db1-worker v1.2.6
@@ -70,16 +71,23 @@ async function checkInternalKey(request, env) {
   return providedKey === cachedInternalKey;
 }
 
+// v1.2.9 ADD: whitelist for editable columns and "clearable" subset
+const EDITABLE_COLS = [
+  "status","video_type","scheduled_at","r2_url","r2_transcript_url",
+  "video_filename","content_type","file_size_bytes","transcript_id",
+  "planly_media_id","social_copy_hook","social_copy_body","social_copy_cta","hashtags"
+];
+// Only these may be force-cleared to NULL via `clears`
+const CLEARABLE_COLS = new Set([
+  "scheduled_at","social_copy_hook","social_copy_body","social_copy_cta","hashtags"
+]);
+
+
 export default {
 	async fetch(request, env, ctx) {
-		//DEBUG: Check what's available in env
-		console.log("🔍 Available env bindings:", Object.keys(env));
-		console.log("🔍 env.DB type:", typeof env.DB);
-		console.log("🔍 env.DB1 type:", typeof env.DB1);
 		const url = new URL(request.url);
 		const origin = request.headers.get("origin");
-		console.log("💥 Detected Origin header:", origin);
-		
+				
 		await env.GRAFANA_WORKER.fetch("https://log", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -197,10 +205,9 @@ export default {
 			},
 			});
 		}
-		}		
+		}	
 
-// new UPSERT code includes time/date stamping for record_created and/or record_modified
-console.log("✅ Running db1-worker UPSERT with 18 bindings (17fields + conflict)"); //DEBUG
+//UPSERT code includes time/date stamping for record_created and/or record_modified
 
 		if (request.method === "POST" && url.pathname === "/db1/videos") {
 		try {
@@ -245,12 +252,21 @@ console.log("✅ Running db1-worker UPSERT with 18 bindings (17fields + conflict
 				record_modified: now
 				};
 
-console.log("🧪 Binding values length:", [
-  title, status, video_type, scheduled_at, r2_url, r2_transcript_url,
-  video_filename, content_type, file_size_bytes, transcript_id,
-  planly_media_id, social_copy_hook, social_copy_body, social_copy_cta,
-  hashtags, now, now
-].length);
+// v1.2.9 ADD: sanitize clears[]
+const rawClears = Array.isArray(body?.clears) ? body.clears : [];
+const clears = rawClears
+  .filter((k) => typeof k === "string" && CLEARABLE_COLS.has(k));
+
+	// v1.2.9 CHANGED: dynamic DO UPDATE SET to honor `clears`
+const updateAssignments = [
+  // For each editable column: if in `clears` -> NULL, else COALESCE(excluded.col, videos.col)
+  ...EDITABLE_COLS.map((col) => {
+    if (clears.includes(col)) return `${col} = NULL`;
+    return `${col} = COALESCE(excluded.${col}, videos.${col})`;
+  }),
+  // Always bump record_modified on UPSERT
+  `record_modified = ?`
+].join(",\n                ");
 
 			const stmt = env.DB.prepare(`
 			INSERT INTO videos (
@@ -261,60 +277,29 @@ console.log("🧪 Binding values length:", [
 			)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(title) DO UPDATE SET
-				status = COALESCE(excluded.status, videos.status),
-				video_type = COALESCE(excluded.video_type, videos.video_type),
-				scheduled_at = COALESCE(excluded.scheduled_at, videos.scheduled_at),
-				r2_url = COALESCE(excluded.r2_url, videos.r2_url),
-				r2_transcript_url = COALESCE(excluded.r2_transcript_url, videos.r2_transcript_url),
-				video_filename = COALESCE(excluded.video_filename, videos.video_filename),
-				content_type = COALESCE(excluded.content_type, videos.content_type),
-				file_size_bytes = COALESCE(excluded.file_size_bytes, videos.file_size_bytes),
-				transcript_id = COALESCE(excluded.transcript_id, videos.transcript_id),
-				planly_media_id = COALESCE(excluded.planly_media_id, videos.planly_media_id),
-				social_copy_hook = COALESCE(excluded.social_copy_hook, videos.social_copy_hook),
-				social_copy_body = COALESCE(excluded.social_copy_body, videos.social_copy_body),
-				social_copy_cta = COALESCE(excluded.social_copy_cta, videos.social_copy_cta),
-				hashtags = COALESCE(excluded.hashtags, videos.hashtags),
-				record_modified = ?
+				${updateAssignments}
 			`)
 			.bind(
-				fullPayload.title,
-				fullPayload.status,
-				fullPayload.video_type,
-				fullPayload.scheduled_at,
-				fullPayload.r2_url,
-				fullPayload.r2_transcript_url,
-				fullPayload.video_filename,
-				fullPayload.content_type,
-				fullPayload.file_size_bytes,
-				fullPayload.transcript_id,
-				fullPayload.planly_media_id,
-				fullPayload.social_copy_hook,
-				fullPayload.social_copy_body,
-				fullPayload.social_copy_cta,
-				fullPayload.hashtags,
-				fullPayload.record_created,
-				fullPayload.record_modified, // <-- for VALUES(...)
-				fullPayload.record_modified  // <-- for ON CONFLICT clause
+			fullPayload.title,
+			fullPayload.status,
+			fullPayload.video_type,
+			fullPayload.scheduled_at,
+			fullPayload.r2_url,
+			fullPayload.r2_transcript_url,
+			fullPayload.video_filename,
+			fullPayload.content_type,
+			fullPayload.file_size_bytes,
+			fullPayload.transcript_id,
+			fullPayload.planly_media_id,
+			fullPayload.social_copy_hook,
+			fullPayload.social_copy_body,
+			fullPayload.social_copy_cta,
+			fullPayload.hashtags,
+			fullPayload.record_created,
+			fullPayload.record_modified, // VALUES(... last)
+			fullPayload.record_modified  // for DO UPDATE record_modified = ?
 			);
-console.log("✅ DB1 binding fields:", { //DEBUG
-  title,
-  status,
-  video_type,
-  scheduled_at,
-  r2_url,
-  r2_transcript_url,
-  video_filename,
-  content_type,
-  file_size_bytes,
-  transcript_id,
-  planly_media_id,
-  social_copy_hook,
-  social_copy_body,
-  social_copy_cta,
-  hashtags,
-  now
-});
+
 			await stmt.run();
 
 			await env.GRAFANA_WORKER.fetch("https://log", {
@@ -447,6 +432,7 @@ console.log("✅ DB1 binding fields:", { //DEBUG
 			}
 		}
 
-		return new Response("Not found", { status: 404 });
+return new Response("Not found", { status: 404, headers: getCorsHeaders(origin) });
+
 	},
 };
