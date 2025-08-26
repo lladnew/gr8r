@@ -1,3 +1,4 @@
+//dbadmin-react-site/VideosTable.tsx v1.0.8 ADDED editing (UPSERT) capabilities to page
 //dbadmin-react-site/VideosTable.tsx v1.0.7 ADDED column sorting capabilities
 //dbadmin-react-site/VideosTable.tsx v1.0.6 ADDED proper pagination effects
 //dbadmin-react-site/VideosTable.tsx v1.0.5 CHANGES: revised to use static dev validation when running in local dev mode; adjusted use dependency for copied cells to not re-fetch the whole table
@@ -17,6 +18,28 @@ import {
 } from '@tanstack/react-table';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import ColumnSelectorModal from './ColumnSelectorModal';
+
+// v1.0.8 ADD: editing helpers/consts
+const EDITABLE_NO_CLEAR = new Set(["status", "video_type"]);
+const EDITABLE_WITH_CLEAR = new Set([
+  "scheduled_at", "social_copy_hook", "social_copy_body", "social_copy_cta", "hashtags"
+]);
+
+function isEditable(field: string) {
+  return EDITABLE_NO_CLEAR.has(field) || EDITABLE_WITH_CLEAR.has(field);
+}
+
+function toLocalDatetimeInputValue(iso?: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function fromLocalDatetimeInputValue(val: string): string | null {
+  if (!val) return null;
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? null : d.toISOString();
+}
 
 type RecordType = { [key: string]: any };
 const defaultVisible = ['title', 'status', 'scheduled_at'];
@@ -39,6 +62,16 @@ export default function VideosTable() {
       return [];
     }
   });
+  // v1.0.8 ADD: edit sheet state
+  const [editOpen, setEditOpen] = useState(false);
+  const [editRecord, setEditRecord] = useState<RecordType | null>(null);
+  const [editLocal, setEditLocal] = useState<Record<string, any>>({});
+  const [editClears, setEditClears] = useState<Set<string>>(new Set());
+
+  // v1.0.8 ADD: confirmation modal for clears
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const [confirmClearFields, setConfirmClearFields] = useState<string[]>([]);
+  const [confirmInput, setConfirmInput] = useState("");
 
   useEffect(() => {
     if (!columns.length || !sorting.length) return;
@@ -92,11 +125,12 @@ export default function VideosTable() {
         setColumnVisibility(visibility);
 
         setColumns(
-          allKeys.map((key) => ({
+        (() => {
+          const baseCols = allKeys.map((key) => ({
             accessorKey: key,
             enableSorting: true,
             header: ({ column }) => {
-              const dir = column.getIsSorted(); // 'asc' | 'desc' | false
+              const dir = column.getIsSorted();
               return (
                 <button
                   type="button"
@@ -112,6 +146,7 @@ export default function VideosTable() {
                 </button>
               );
             },
+            // ⬇️ keep your existing left-click copy cell body unchanged:
             cell: (info) => {
               const val = info.getValue();
               const cellId = `${info.row.id}-${key}`;
@@ -147,9 +182,7 @@ export default function VideosTable() {
                       side="top"
                       sideOffset={5}
                       className={`z-50 rounded-md px-2 py-1 text-sm max-w-[500px] break-words border text-black ${
-                        isCopied
-                          ? 'bg-orange-600 border-orange-600'
-                          : 'bg-white border-2 border-[#003E24]'
+                        isCopied ? 'bg-orange-600 border-orange-600' : 'bg-white border-2 border-[#003E24]'
                       }`}
                     >
                       {isCopied ? (
@@ -160,15 +193,42 @@ export default function VideosTable() {
                           <div className="text-[#003E24]">{display}</div>
                         </>
                       )}
-
                       <Tooltip.Arrow className={isCopied ? 'fill-orange-600' : 'fill-[#003E24]'} />
                     </Tooltip.Content>
                   </Tooltip.Portal>
                 </Tooltip.Root>
               );
             },
-          }))
-        );
+          }));
+
+          // v1.0.8 ADD: kebab actions column (sticky right)
+       const kebabCol: ColumnDef<RecordType> = {
+        id: "_actions",
+        header: () => <div className="w-[56px]" aria-hidden />,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const rec = row.original as RecordType;
+          return (
+            <div className="pl-2 pr-1 py-1">
+              <button
+                className="px-2 py-1 text-xl leading-none rounded hover:bg-gray-100"
+                aria-label={`Edit ${rec.title ?? ''}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openEditSheet(rec);
+                }}
+              >
+                ⋮
+              </button>
+            </div>
+          );
+        },
+      };
+
+          return [...baseCols, kebabCol];
+        })()
+      );
+
        // Apply default only if initial sorting is empty
         if (!sorting.length && allKeys.includes(DEFAULT_SORT_COL)) {
           setSorting(DEFAULT_SORT);
@@ -205,6 +265,57 @@ export default function VideosTable() {
               }
             };
           }, []);
+
+          // v1.0.8 ADD
+        function visibleEditableFieldsFor(record: RecordType) {
+          // If visibility hasn't been initialized yet, fall back to defaultVisible
+          const hasVisibility = Object.keys(columnVisibility).length > 0;
+
+          const visibleKeys = hasVisibility
+            ? Object.keys(columnVisibility).filter((k) => columnVisibility[k])
+            : Object.keys(record).filter((k) => defaultVisible.includes(k) || isEditable(k));
+
+          return visibleKeys.filter((k) => isEditable(k) && k in record);
+        }
+
+        function openEditSheet(record: RecordType) {
+          let fields = visibleEditableFieldsFor(record);
+          if (!fields.length) {
+            // Fallback to all editable keys present on the record
+            fields = Object.keys(record).filter((k) => isEditable(k));
+          }
+
+          const start: Record<string, any> = {};
+          fields.forEach((k) => {
+            if (k === "scheduled_at") {
+              start[k] = toLocalDatetimeInputValue(record[k]);
+            } else {
+              const v = record[k];
+              start[k] = (v === null || v === undefined) ? "" : String(v);
+            }
+          });
+
+          setEditRecord(record);
+          setEditLocal(start);
+          setEditClears(new Set());
+          setEditOpen(true);
+        }
+
+        async function savePartial(body: Record<string, any>) {
+          const API_BASE = import.meta.env.DEV ? "" : "https://admin.gr8r.com";
+          const res = await fetch(`${API_BASE}/db1/videos`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: import.meta.env.DEV ? "same-origin" : "include",
+            body: JSON.stringify(body),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            return { ok: false as const, err: text || `HTTP ${res.status}` };
+          }
+          return { ok: true as const };
+        }
+
   const handleResetColumns = () => {
     const reset = Object.fromEntries(
       columns.map(c => [c.accessorKey as string, defaultVisible.includes(c.accessorKey as string)])
@@ -316,7 +427,12 @@ export default function VideosTable() {
                 {headerGroup.headers.map(header => (
                   <th
                     key={header.id}
-                    className="px-2 py-1 text-left whitespace-nowrap sticky top-0 z-10 bg-white"
+                    className={
+                      "px-2 py-1 text-left whitespace-nowrap sticky top-0 z-10 bg-white " +
+                      (header.column.id === "_actions"
+                        ? "right-0 z-20 shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.08)]"
+                        : "")
+                    }
                   >
                     {flexRender(header.column.columnDef.header, header.getContext())}
                   </th>
@@ -326,11 +442,22 @@ export default function VideosTable() {
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
             {table.getRowModel().rows.map(row => (
-              <tr key={row.id}>
+              <tr
+                key={row.id}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  openEditSheet(row.original as RecordType);
+                }}
+              >
                 {row.getVisibleCells().map(cell => (
                   <td
                     key={cell.id}
-                    className="px-2 py-1 whitespace-nowrap overflow-hidden text-ellipsis max-w-[200px]"
+                    className={
+                      "px-2 py-1 whitespace-nowrap overflow-hidden text-ellipsis max-w-[200px] " +
+                      (cell.column.id === "_actions"
+                        ? "sticky right-0 z-10 bg-white w-[56px] min-w-[56px] max-w-[56px] shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.08)]"
+                        : "")
+                    }
                   >
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </td>
@@ -378,6 +505,198 @@ export default function VideosTable() {
           </div>
         </div>
       </div>
+      {/* v1.1.0 ADD: Edit bottom sheet */}
+      {editOpen && editRecord && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-end" onClick={() => setEditOpen(false)}>
+          <div className="w-full bg-white rounded-t-2xl p-4 max-h-[85vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <div className="font-semibold text-lg">Edit: {editRecord.title}</div>
+              <button className="text-2xl leading-none" onClick={() => setEditOpen(false)}>×</button>
+            </div>
+
+            {/* fields */}
+            {visibleEditableFieldsFor(editRecord).map((field) => {
+              const canClear = EDITABLE_WITH_CLEAR.has(field);
+              return (
+                <div key={field} className="mt-4">
+                  <label className="block text-sm font-medium mb-1">{field}</label>
+
+                  {field === "scheduled_at" ? (
+                    <input
+                      type="datetime-local"
+                      className="border rounded w-full px-2 py-1"
+                      value={editLocal[field] ?? ""}
+                      onChange={(e) => {
+                        setEditLocal((s) => ({ ...s, [field]: e.target.value }));
+                        // editing cancels any pending clear
+                        setEditClears((prev) => {
+                          const next = new Set(prev);
+                          next.delete(field);
+                          return next;
+                        });
+                      }}
+                    />
+                  ) : (
+                    <textarea
+                      className="border rounded w-full px-2 py-1 min-h-24"
+                      value={editLocal[field] ?? ""}
+                      onChange={(e) => {
+                        setEditLocal((s) => ({ ...s, [field]: e.target.value }));
+                        setEditClears((prev) => {
+                          const next = new Set(prev);
+                          next.delete(field);
+                          return next;
+                        });
+                      }}
+                    />
+                  )}
+
+                  <div className="mt-1 flex items-center gap-2">
+                    {canClear && (
+                      <>
+                        <button
+                          className="px-2 py-0.5 text-xs border rounded"
+                          onClick={() => {
+                            setConfirmClearFields([field]);
+                            setConfirmInput("");
+                            setConfirmClearOpen(true);
+                          }}
+                        >
+                          Clear
+                        </button>
+                        {editClears.has(field) && (
+                          <span className="text-xs text-orange-700">Will clear on save</span>
+                        )}
+                      </>
+                    )}
+                    {!canClear && (
+                      <span className="text-xs text-gray-500">Clearing disabled</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
+            <div className="flex justify-end gap-2 mt-6">
+              <button className="px-3 py-1 border rounded" onClick={() => setEditOpen(false)}>Cancel</button>
+              <button
+                className="px-3 py-1 border rounded bg-[#003E24] text-white"
+                onClick={async () => {
+                  if (!editRecord) return;
+
+                  // Build diff payload
+                  const payload: Record<string, any> = { title: editRecord.title };
+                  const clears: string[] = [];
+
+                  for (const field of visibleEditableFieldsFor(editRecord)) {
+                    const original = editRecord[field];
+                    if (EDITABLE_WITH_CLEAR.has(field) && editClears.has(field)) {
+                      clears.push(field);
+                      continue;
+                    }
+                    const nextVal = editLocal[field];
+
+                    if (field === "scheduled_at") {
+                      // Convert datetime-local -> ISO for comparison/save
+                      const nextISO = fromLocalDatetimeInputValue(nextVal);
+                      const origISO = original ?? null;
+                      if (nextISO !== origISO) {
+                        // If user blanked it without pressing Clear, treat as "no change"
+                        if (nextISO) payload[field] = nextISO;
+                      }
+                    } else {
+                      const normalizedNext = (nextVal ?? "").toString();
+                      const normalizedOrig = (original ?? "").toString();
+                      if (normalizedNext !== normalizedOrig) {
+                        // For no-clear fields, empty string means empty string (allowed)
+                        payload[field] = normalizedNext;
+                      }
+                    }
+                  }
+
+                  if (clears.length) payload.clears = clears;
+
+                  // nothing changed?
+                  if (Object.keys(payload).length === 1 && !payload.clears) {
+                    setEditOpen(false);
+                    return;
+                  }
+
+                  // optimistic UI
+                  const before = editRecord;
+                  setData((prev) =>
+                    prev.map((r) => {
+                      if (r.title !== editRecord.title) return r;
+                      const next = { ...r, ...payload };
+                      // Apply clears optimistically
+                      if (clears.length) {
+                        clears.forEach((f) => { next[f] = null; });
+                      }
+                      next.record_modified = new Date().toISOString();
+                      return next;
+                    })
+                  );
+
+                  const res = await savePartial(payload);
+                  if (!res.ok) {
+                    // rollback
+                    setData((prev) => prev.map((r) => (r.title === before.title ? before : r)));
+                    alert(`Save failed: ${res.err}`);
+                    return;
+                  }
+
+                  setEditOpen(false);
+                }}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* v1.1.0 ADD: Confirm-clear modal (typed YES) */}
+      {confirmClearOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center" onClick={() => setConfirmClearOpen(false)}>
+          <div className="bg-white rounded-xl shadow-xl p-4 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="font-semibold text-lg mb-2">Confirm Clear</div>
+            <p className="text-sm mb-2">
+              This will permanently clear: <strong>{confirmClearFields.join(", ")}</strong>.
+              This is not reversible.
+            </p>
+            <p className="text-sm mb-3">Type <strong>YES</strong> to confirm.</p>
+            <input
+              className="border rounded w-full px-2 py-1"
+              value={confirmInput}
+              onChange={(e) => setConfirmInput(e.target.value)}
+              placeholder="YES"
+            />
+            <div className="flex justify-end gap-2 mt-4">
+              <button className="px-3 py-1 border rounded" onClick={() => setConfirmClearOpen(false)}>Cancel</button>
+              <button
+                className="px-3 py-1 border rounded bg-red-600 text-white"
+                disabled={confirmInput !== "YES"}
+                onClick={() => {
+                  // Mark fields as cleared and blank their UI value
+                  setEditClears((prev) => {
+                    const next = new Set(prev);
+                    confirmClearFields.forEach((f) => next.add(f));
+                    return next;
+                  });
+                  setEditLocal((prev) => {
+                    const next = { ...prev };
+                    confirmClearFields.forEach((f) => { next[f] = ""; });
+                    return next;
+                  });
+                  setConfirmClearOpen(false);
+                }}
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </Tooltip.Provider>
   );
 }
