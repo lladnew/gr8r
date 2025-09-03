@@ -1,3 +1,4 @@
+//gr8r-db1-worker v1.3.0 ADD: server-side validation 
 //gr8r-db1-worker v1.2.9 ADD: support for force clearing certain database cells: scheduled_at, social_copy_hook, social_copy_body, social_copy_cta, and hashtags
 //gr8r-db1-worker v1.2.8 modified origin for CORS checks - fighting with dev browser issues
 //gr8r-db1-worker v1.2.7 modified GET to return All sorted by most recent record_modified
@@ -81,7 +82,21 @@ const EDITABLE_COLS = [
 const CLEARABLE_COLS = new Set([
   "scheduled_at","social_copy_hook","social_copy_body","social_copy_cta","hashtags"
 ]);
+// v1.2.10 ADD: server-side validation enums
+const ALLOWED_STATUS = new Set([
+  "Scheduled",
+  "Pending Schedule",
+  "Working",
+  "Hold",
+  "Pending Transcription",
+]);
 
+const ALLOWED_VIDEO_TYPE = new Set([
+  "Pivot Year",
+  "Newsletter",
+  "Other",
+  "Unlisted",
+]);
 
 export default {
 	async fetch(request, env, ctx) {
@@ -232,6 +247,28 @@ export default {
 				} = body;
 
 			const now = new Date().toISOString();
+			// v1.2.10 ADD: value checks for enums (if provided)
+			if (status !== null && status !== undefined && !ALLOWED_STATUS.has(status)) {
+			return new Response(JSON.stringify({
+				success: false,
+				error: "Invalid status",
+				message: `Status must be one of: ${[...ALLOWED_STATUS].join(", ")}`,
+			}), {
+				status: 400,
+				headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+			});
+			}
+
+			if (video_type !== null && video_type !== undefined && !ALLOWED_VIDEO_TYPE.has(video_type)) {
+			return new Response(JSON.stringify({
+				success: false,
+				error: "Invalid video_type",
+				message: `Video type must be one of: ${[...ALLOWED_VIDEO_TYPE].join(", ")}`,
+			}), {
+				status: 400,
+				headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+			});
+			}
 			const fullPayload = {
 				title,
 				status,
