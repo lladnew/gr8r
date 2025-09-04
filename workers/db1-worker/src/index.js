@@ -1,3 +1,6 @@
+//gr8r-db1-worker v1.4.0 	
+// ADD: import for secrets.js and grafana.js
+// MODIFY: 6 spots calling grafana-worker with new grafana.js script and improved consistency approach
 //gr8r-db1-worker v1.3.0 ADD: server-side validation 
 //gr8r-db1-worker v1.2.9 ADD: support for force clearing certain database cells: scheduled_at, social_copy_hook, social_copy_body, social_copy_cta, and hashtags
 //gr8r-db1-worker v1.2.8 modified origin for CORS checks - fighting with dev browser issues
@@ -20,6 +23,14 @@
 //UPDATED: field values to null when first declared so that if not overwritten they wil be null and not throw the undefined error
 //ADDED: key caching for this worker
 //Removed: full header dump and console log that was added for troubleshooting auth
+
+// new getSecret function module
+import { getSecret } from "../../../lib/secrets.js";
+
+// new Grafan logging shared script
+import { createLogger } from "../../../lib/grafana.js";
+const log = createLogger({ source: "gr8r-db1-worker" });
+
 
 function getCorsHeaders(origin) {
 	const allowedOrigins = [
@@ -102,21 +113,20 @@ export default {
 	async fetch(request, env, ctx) {
 		const url = new URL(request.url);
 		const origin = request.headers.get("origin");
-				
-		await env.GRAFANA_WORKER.fetch("https://log", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				source: "gr8r-db1-worker",
-				level: "debug",
-				message: "Incoming request",
-				meta: {
-					origin,
-					method: request.method,
-					url: request.url,
-				},
-			}),
-		});
+		// Trace seeds for consistent meta
+		const request_id = crypto.randomUUID();
+		const t0 = Date.now();
+
+		await log(env, {
+			level: "debug",
+			service: "bootstrap",
+			message: "Incoming request",
+			meta: {
+				request_id, route: url.pathname, method: request.method,
+				origin, ok: true
+			}
+		});		
+
 		//Handle CORS preflight requests dynamically
 		if (request.method === "OPTIONS") {
 			return new Response(null, {
@@ -128,19 +138,15 @@ export default {
 		// ADDED: Replace legacy internal header check with Authorization: Bearer
 		const isInternal = await checkInternalKey(request, env);
 
-		await env.GRAFANA_WORKER.fetch("https://log", {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({
-			source: "gr8r-db1-worker",
-			level: "debug",
-			message: "Caller identity check",
-			meta: {
-			auth_header: request.headers.get("Authorization")?.slice(0, 15), // truncated
-			internal: isInternal,
-			},
-		}),
-		});
+		await log(env, {
+		level: "debug",
+		service: "auth",
+		message: "Caller identity checked",
+		meta: {
+			request_id, route: url.pathname, method: request.method,
+			origin, internal: isInternal, ok: true
+			}
+		});	
 
 		if (!isInternal) {
 		// 🔒 JWT required for external requests
@@ -202,16 +208,15 @@ export default {
 		}
 
 		if (!valid) {
-			await env.GRAFANA_WORKER.fetch("https://log", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				source: "gr8r-db1-worker",
-				level: "error",
-				message: "JWT verification failed",
-				meta: { origin, jwtStart: jwt?.slice(0, 15) }, // truncate for privacy
-			}),
-			});
+				await log(env, {
+					level: "info",
+					service: "auth",
+					message: "Request denied",
+					meta: {
+						request_id, route: url.pathname, method: request.method,
+						origin, ok: false, status: 401, reason: "invalid_jwt"
+					}
+				});	
 			return new Response("Invalid JWT", {
 			status: 401,
 			headers: {
@@ -315,7 +320,12 @@ const updateAssignments = [
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(title) DO UPDATE SET
 				${updateAssignments}
-			`)
+				RETURNING
+					rowid AS _rid,
+					CASE WHEN rowid = last_insert_rowid()
+						THEN 'insert' ELSE 'update' END AS _action
+				`)
+			
 			.bind(
 			fullPayload.title,
 			fullPayload.status,
@@ -337,19 +347,23 @@ const updateAssignments = [
 			fullPayload.record_modified  // for DO UPDATE record_modified = ?
 			);
 
-			await stmt.run();
-
-			await env.GRAFANA_WORKER.fetch("https://log", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				source: "gr8r-db1-worker",
-				level: "info",
-				message: "Upserted video",
-				meta: { title, scheduled_at, video_type }
-			}),
+			const upsertRes = await stmt.all();
+			const action = upsertRes?.results?.[0]?._action || "unknown";
+		
+			await log(env, {
+			level: "info",
+			service: "db1-upsert",
+			message: "Upserted video",
+			meta: {
+				request_id, route: url.pathname, method: request.method,
+				ok: true, status: 200,
+				// domain-safe fields:
+				title, video_type, scheduled_at,
+				clears_count: Array.isArray(body?.clears) ? body.clears.length : 0,
+				action,                  // "insert" | "update" | "unknown"
+				duration_ms: Date.now() - t0
+				}
 			});
-
 			const db1Data = {
 				title,
 				status,
@@ -378,16 +392,17 @@ const updateAssignments = [
 				});
 
 
-		} catch (err) {
-			await env.GRAFANA_WORKER.fetch("https://log", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				source: "gr8r-db1-worker",
-				level: "error",
-				message: "Failed to upsert video",
-				meta: { error: err.message }
-			}),
+		} catch (err) {					
+			await log(env, {
+				level: "warn",
+				service: "db1-upsert",
+				message: "Upsert failed",
+				meta: {
+					request_id, route: url.pathname, method: request.method,
+					ok: false, status: 400,
+					error: err?.message,
+					duration_ms: Date.now() - t0
+				}
 			});
 
 			return new Response(JSON.stringify({
@@ -452,6 +467,18 @@ const updateAssignments = [
 							stack: err.stack
 						},
 					}),
+				});
+
+				await log(env, {
+					level: "error",
+					service: "db1-fetch",
+					message: "GET /db1/videos failed",
+					meta: {
+						request_id, route: url.pathname, method: request.method,
+						ok: false, status: 500,
+						error: err?.message, stack: err?.stack,
+						duration_ms: Date.now() - t0
+					}
 				});
 
 				// CHANGED: Apply dynamic CORS headers on error
