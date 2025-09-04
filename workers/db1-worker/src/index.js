@@ -1,7 +1,8 @@
-//gr8r-db1-worker v1.4.0 	
+//gr8r-db1-worker v1.3.2 MODIFY: replaced Secret Store process with new getSecret() 
+//gr8r-db1-worker v1.3.1 	
 // ADD: import for secrets.js and grafana.js
 // MODIFY: 6 spots calling grafana-worker with new grafana.js script and improved consistency approach
-//gr8r-db1-worker v1.3.0 ADD: server-side validation 
+//gr8r-db1-worker v1.3.0 ADD: server-side data validation for status and video_type
 //gr8r-db1-worker v1.2.9 ADD: support for force clearing certain database cells: scheduled_at, social_copy_hook, social_copy_body, social_copy_cta, and hashtags
 //gr8r-db1-worker v1.2.8 modified origin for CORS checks - fighting with dev browser issues
 //gr8r-db1-worker v1.2.7 modified GET to return All sorted by most recent record_modified
@@ -31,6 +32,14 @@ import { getSecret } from "../../../lib/secrets.js";
 import { createLogger } from "../../../lib/grafana.js";
 const log = createLogger({ source: "gr8r-db1-worker" });
 
+// --- Secrets-backed internal key (cached) ---
+let _internalKeyCache = null;
+async function getInternalKey(env) {
+  if (_internalKeyCache) return _internalKeyCache;
+  const raw = await getSecret(env, "DB1_INTERNAL_KEY");
+  _internalKeyCache = (raw ?? "").toString().trim();
+  return _internalKeyCache;
+}
 
 function getCorsHeaders(origin) {
 	const allowedOrigins = [
@@ -62,25 +71,16 @@ function base64urlToUint8Array(base64url) {
 
 let cachedInternalKey = null;
 
-// Check for internal Bearer key auth and added key caching for this worker
+// Check for internal Bearer key auth using Secrets Store (cached)
 async function checkInternalKey(request, env) {
   const authHeader = request.headers.get("Authorization");
   if (!authHeader?.startsWith("Bearer ")) return false;
 
-  // DEFINE providedKey first
-  const providedKey = authHeader.slice(7).trim(); // Skip "Bearer ", trim in case of newline/space
+// DEFINE providedKey first
+const providedKey = authHeader.slice(7).trim(); // Skip "Bearer ", trim in case of newline/space
 
-  // Only fetch secret once per instance
-  if (!cachedInternalKey) {
-    // If this binding is a Secret Store object, .get() returns the value.
-    // If it's a plain string secret, .get() won't exist — adjust as needed.
-    cachedInternalKey = await env.DB1_INTERNAL_KEY.get();
-    if (typeof cachedInternalKey === "string") {
-      cachedInternalKey = cachedInternalKey.trim();
-    }
-  }
-
-  return providedKey === cachedInternalKey;
+const secret = await getInternalKey(env);
+return providedKey && secret && (providedKey === secret);
 }
 
 // v1.2.9 ADD: whitelist for editable columns and "clearable" subset
@@ -119,7 +119,7 @@ export default {
 
 		await log(env, {
 			level: "debug",
-			service: "bootstrap",
+			service: "request",
 			message: "Incoming request",
 			meta: {
 				request_id, route: url.pathname, method: request.method,
@@ -455,20 +455,6 @@ const updateAssignments = [
 				});
 
 			} catch (err) {
-				await env.GRAFANA_WORKER.fetch("https://log", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						source: "gr8r-db1-worker",
-						level: "error",
-						message: "GET /videos failed",
-						meta: {
-							error: err.message,
-							stack: err.stack
-						},
-					}),
-				});
-
 				await log(env, {
 					level: "error",
 					service: "db1-fetch",

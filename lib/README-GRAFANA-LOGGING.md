@@ -15,7 +15,7 @@
 **Always include**
 
 * `source`: fixed service origin (e.g., `gr8r-db1-worker`)
-* `service`: coarse component within the worker (e.g., `auth`, `db1-upsert`, `db1-fetch`, `bootstrap`)
+* `service`: coarse component within the worker (e.g., `auth`, `db1-upsert`, `db1-fetch`, `request`)
 * `level`: `debug | info | warn | error`
 
 > Keep labels short and stable. Labels should be low‑cardinality strings; do not place dynamic/user input in labels.
@@ -118,20 +118,6 @@ The outer Loki envelope should contain **labels**:
 * In `meta`, allow primitives only; drop functions/objects to avoid bloat.
 * Convert timestamps to **nanoseconds** (`Date.now() * 1_000_000`).
 * If the push fails, throw in dev; callers should wrap in `try/catch` so the request code never fails solely due to logging errors.
-
----
-
-## Queries you’ll use often
-
-* Success vs failure by service:
-
-  * `{source="gr8r-db1-worker"} | json | unwrap ok | sum by (service) (count_over_time(ok[5m]))`
-* Latency (p95):
-
-  * `{source="gr8r-db1-worker"} | json | unwrap duration_ms | quantile_over_time(0.95, duration_ms[15m])`
-* Auth denials (lightweight):
-
-  * `{source="gr8r-db1-worker", service="auth", level="info"} | json | reason`
 
 ---
 
