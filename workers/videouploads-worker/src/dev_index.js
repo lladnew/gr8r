@@ -5,8 +5,8 @@
 // v1.3.7 gr8r-videouploads-worker revised santizeForDB1 function for null and empty values
 
 // Shared libs
-import { logToGrafana } from './lib/grafana.js';
-import { getSecret } from './lib/secrets.js';
+import { logToGrafana } from '../../../lib/grafana.js';
+import { getSecret } from '../../../lib/secrets.js';
 
 function sanitizeForDB1(obj) {
   return Object.fromEntries(
