@@ -1,3 +1,4 @@
+// v1.4.2 gr8r-videouploads-worker ADDED: parsing for Channels list incoming and logging for that
 // v1.4.1 gr8r-videouploads-worker CHANGED: migrate logging to lib/grafana.js with Best Practices and migrate secrets to lib/secrets.js  ADDED: temp cosole log starting line 82 to show the incoming body for testing
 // v1.4.0 gr8r-videouploads-worker fixes made going live with D1 UPSERT code
 // v1.3.8 gr8r-videouploads-worker added key caching function and updated both DB1 calls to utilize
@@ -86,9 +87,16 @@ export default {
         // TEMP: log full incoming payload for troubleshooting
         console.log("[videouploads-worker] Incoming request body:", JSON.stringify(body, null, 2));
 
-        const { filename, title, videoType, scheduleDateTime = "" } = body;
+        const { filename, title, videoType, channels, scheduleDateTime = "" } = body;
 
-        // ADDED: safe parse log
+        // ADDED: normalize channels -> array of trimmed names
+        const channelsList = Array.isArray(channels)
+        ? channels
+        : String(channels || "")
+            .split(/\r?\n/)        // split on newlines from Shortcut
+            .map(s => s.trim())
+            .filter(Boolean);
+         // Safe parse log
         try {
         await log(env, {
             level: "debug",
@@ -99,10 +107,14 @@ export default {
             ok: true,
             title: (title || "").slice(0, 120),
             video_type: videoType || null,
-            scheduled_at: scheduleDateTime || null
+            scheduled_at: scheduleDateTime || null,
+            channels: channelsList || null
             }
         });
         } catch {}
+
+        // TEMP: log normalized channels for verification
+        console.log("[videouploads-worker] Channels (normalized):", JSON.stringify(channelsList));
 
         console.log('[videouploads-worker] Parsed fields:');
         console.log('  title:', title);
@@ -237,7 +249,7 @@ export default {
         throw new Error(`Airtable create failed: ${text}`);
         }
 
-        // DB1 update to mirror Airtable
+        // DB1 update diverging from Airtable in v1.4.2
 
         const db1Body = sanitizeForDB1({
           title,
