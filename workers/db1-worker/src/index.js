@@ -28,7 +28,7 @@
 // new getSecret function module
 import { getSecret } from "../../../lib/secrets.js";
 
-// new Grafan logging shared script
+// new Grafana logging shared script
 import { createLogger } from "../../../lib/grafana.js";
 const log = createLogger({ source: "gr8r-db1-worker" });
 

@@ -5,8 +5,12 @@
 // v1.3.7 gr8r-videouploads-worker revised santizeForDB1 function for null and empty values
 
 // Shared libs
-import { logToGrafana } from '../../../lib/grafana.js';
-import { getSecret } from '../../../lib/secrets.js';
+// new getSecret function module
+import { getSecret } from "../../../lib/secrets.js";
+
+// new Grafana logging shared script
+import { createLogger } from "../../../lib/grafana.js";
+const log = createLogger({ source: "gr8r-videouploads-worker" });
 
 function sanitizeForDB1(obj) {
   return Object.fromEntries(
@@ -41,7 +45,7 @@ export default {
 
         // ADDED: initial request trace (debug)
         try {
-        await logToGrafana(env, {
+        await log(env, {
             level: "debug",
             service: "request",
             message: "request received",
@@ -55,7 +59,7 @@ export default {
 
     if (request.method !== 'POST') {
         try {
-            await logToGrafana(env, {
+            await log(env, {
             level: "warn",
             service: "request",
             message: "method not allowed",
@@ -86,7 +90,7 @@ export default {
 
         // ADDED: safe parse log
         try {
-        await logToGrafana(env, {
+        await log(env, {
             level: "debug",
             service: "request",
             message: "parsed request body",
@@ -108,7 +112,7 @@ export default {
         
         if (!(filename && title && videoType)) {
         try {
-            await logToGrafana(env, {
+            await log(env, {
             level: "warn",
             service: "request",
             message: "missing required fields",
@@ -134,7 +138,7 @@ export default {
         const object = await env.VIDEO_BUCKET.get(objectKey);
         if (!object) {
         try {
-            await logToGrafana(env, {
+            await log(env, {
             level: "warn",
             service: "r2-check",
             message: "R2 object missing",
@@ -153,7 +157,7 @@ export default {
         }
         
         try {
-            await logToGrafana(env, {
+            await log(env, {
                 level: "info",
                 service: "r2-check",
                 message: "R2 object verified",
@@ -197,7 +201,7 @@ export default {
         if (airtableResponse.ok) {
         try { airtableData = await airtableResponse.json(); } catch { airtableData = null; }
         try {
-            await logToGrafana(env, {
+            await log(env, {
             level: "info",
             service: "airtable-upsert",
             message: "Airtable upsert ok",
@@ -215,7 +219,7 @@ export default {
         } else {
         const atStatus = airtableResponse.status;
         try {
-            await logToGrafana(env, {
+            await log(env, {
             level: "error",
             service: "airtable-upsert",
             message: "Airtable upsert failed",
@@ -266,7 +270,7 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
 
         if (!db1Response.ok) {
         try {
-            await logToGrafana(env, {
+            await log(env, {
             level: "error",
             service: "db1-upsert",
             message: "DB1 upsert failed",
@@ -283,7 +287,7 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
         throw new Error(`DB1 update failed: ${db1Text}`);
         } else {
         try {
-            await logToGrafana(env, {
+            await log(env, {
             level: "info",
             service: "db1-upsert",
             message: "DB1 upsert ok",
@@ -315,7 +319,7 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
 
         if (!revaiResponse.ok || !revaiJson?.id) {
         try {
-            await logToGrafana(env, {
+            await log(env, {
             level: "error",
             service: "revai-submit",
             message: "Revai submission failed",
@@ -339,7 +343,7 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
         }
 
         try {
-        await logToGrafana(env, {
+        await log(env, {
             level: "info",
             service: "revai-submit",
             message: "Revai submission ok",
@@ -370,7 +374,7 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
         }));
         if (!atFollow.ok) {
         try {
-            await logToGrafana(env, {
+            await log(env, {
             level: "error",
             service: "airtable-followup",
             message: "Airtable transcript failed",
@@ -387,7 +391,7 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
         } catch {}
         } else {
         try {
-            await logToGrafana(env, {
+            await log(env, {
             level: "info",
             service: "airtable-followup",
             message: "Airtable transcript ok",
@@ -426,7 +430,7 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
 
         if (!db1FollowupResponse.ok) {
             try {
-            await logToGrafana(env, {
+            await log(env, {
                 level: "error",
                 service: "db1-followup",
                 message: "DB1 transcript failed",
@@ -445,7 +449,7 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
         }
 
         try {
-            await logToGrafana(env, {
+            await log(env, {
             level: "info",
             service: "db1-followup",
             message: "DB1 transcript ok",
@@ -462,7 +466,7 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
 
         } catch (err) {
         try {
-            await logToGrafana(env, {
+            await log(env, {
             level: "error",
             service: "db1-followup",
             message: "DB1 transcript exception",
@@ -495,7 +499,7 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
         };
 
         try {
-            await logToGrafana(env, {
+            await log(env, {
                 level: "info",
                 service: "response",
                 message: "request complete",
@@ -516,7 +520,7 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
 
       } catch (err) {
         try {
-        await logToGrafana(env, {
+        await log(env, {
             level: "error",
             service: "response",
             message: "request failed",
@@ -543,7 +547,7 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
     }
 
     try {
-        await logToGrafana(env, {
+        await log(env, {
             level: "warn",
             service: "request",
             message: "forbidden route",
