@@ -1,5 +1,5 @@
 name = "gr8r-videouploads-worker"
-main = "src/index.js"
+main = "src/dev_index.js"
 compatibility_date = "2025-06-18"
 account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
 workers_dev = false
@@ -19,14 +19,24 @@ service = "gr8r-revai-worker"
 entrypoint = "fetch"
 
 [[services]]
-binding = "GRAFANA"
-service = "gr8r-grafana-worker"
-entrypoint = "fetch"
-
-[[services]]
 binding = "DB1"
 service = "gr8r-db1-worker"
 entrypoint = "fetch"
+
+[[secrets_store_secrets]]
+binding = "GRAFANACLOUD_GR8R_LOGS_KEY"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "GRAFANACLOUD_GR8R_LOGS_KEY"
+
+[[secrets_store_secrets]]
+binding = "GRAFANACLOUD_GR8R_LOGS_USER"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "GRAFANACLOUD_GR8R_LOGS_USER"
+
+[[secrets_store_secrets]]
+binding = "GRAFANACLOUD_GR8R_LOGS_URL"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "GRAFANACLOUD_GR8R_LOGS_URL"
 
 [[secrets_store_secrets]]
 binding = "DB1_INTERNAL_KEY"
