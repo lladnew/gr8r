@@ -1,4 +1,5 @@
-//gr8r-db1-worker v1.3.2 MODIFY: replaced Secret Store process with new getSecret() 
+//gr8r-db1-worker v1.3.3 ADD: generic /db1/:table GET/POST router + DELETE by unique keys; retains videos behavior but significant code mods
+//gr8r-db1-worker v1.3.2 MODIFY: replaced Secret Store process with new getSecret() and Grafana-worker with new log()
 //gr8r-db1-worker v1.3.1 	
 // ADD: import for secrets.js and grafana.js
 // MODIFY: 6 spots calling grafana-worker with new grafana.js script and improved consistency approach
@@ -51,7 +52,7 @@ function getCorsHeaders(origin) {
 
 	const headers = {
 		"Access-Control-Allow-Headers": "Authorization, Content-Type",
-		"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+		"Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
 		"Access-Control-Allow-Credentials": "true",
 	};
 
@@ -68,8 +69,6 @@ function base64urlToUint8Array(base64url) {
 	const binary = atob(base64);
 	return Uint8Array.from(binary, (c) => c.charCodeAt(0));
 }
-
-let cachedInternalKey = null;
 
 // Check for internal Bearer key auth using Secrets Store (cached)
 async function checkInternalKey(request, env) {
@@ -108,6 +107,293 @@ const ALLOWED_VIDEO_TYPE = new Set([
   "Other",
   "Unlisted",
 ]);
+// ADDED v1.3.3 — per-table configuration & small utilities
+
+/**
+ * For each table:
+ * - table: D1 table name
+ * - uniqueBy: array of columns forming the UPSERT key
+ * - editableCols: columns allowed to be edited (besides timestamps)
+ * - clearableCols: Set of editable columns that may be forced to NULL via body.clears[]
+ * - enumValidators: { colName: Set([...]) } (optional)
+ * - searchable: columns used by ?q= for LIKE search
+ * - defaultSort: ORDER BY fallback
+ * - filterMap: querystring -> "SQL_with_1_placeholder"
+ */
+const TABLES = {
+  videos: {
+    table: "videos",
+    uniqueBy: ["title"],
+    editableCols: EDITABLE_COLS,        // reuse your existing constant
+    clearableCols: CLEARABLE_COLS,      // reuse your existing constant
+    enumValidators: {
+      status: ALLOWED_STATUS,
+      video_type: ALLOWED_VIDEO_TYPE,
+    },
+    searchable: ["title","hashtags","social_copy_hook","social_copy_body","social_copy_cta"],
+    defaultSort: "record_modified DESC",
+    filterMap: {
+      status: "status = ?",
+      type: "video_type = ?",
+      title: "title = ?",
+      since: "record_modified >= ?",
+      before: "record_modified < ?",
+    },
+  },
+
+  // Add new tables below by mirroring the shape above
+  // transcripts: { ... },
+  // social_posts: { ... },
+};
+
+function parsePathAsTable(pathname) {
+  const m = /^\/db1\/([a-zA-Z0-9_]+)$/.exec(pathname);
+  return m ? m[1] : null;
+}
+
+function coerceISOorNull(v) {
+  if (!v) return null;
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+function ensureEnums(tableCfg, body) {
+  const enums = tableCfg.enumValidators || {};
+  for (const [col, allowed] of Object.entries(enums)) {
+    const val = body[col];
+    if (val !== null && val !== undefined && !allowed.has(val)) {
+      return { ok:false, message: `${col} must be one of: ${[...allowed].join(", ")}` };
+    }
+  }
+  return { ok:true };
+}
+
+function buildQueryParts(tableCfg, url) {
+  const { searchParams } = url;
+  const where = [];
+  const binds = [];
+
+  // mapped filters
+  for (const [qs, clause] of Object.entries(tableCfg.filterMap || {})) {
+    const raw = searchParams.get(qs);
+    if (raw !== null && raw !== "") {
+      const val = (qs === "since" || qs === "before") ? coerceISOorNull(raw) : raw;
+      if (val !== null) { where.push(clause); binds.push(val); }
+    }
+  }
+
+  // free-text search
+  const q = searchParams.get("q");
+  if (q && tableCfg.searchable?.length) {
+    const like = `%${q}%`;
+    where.push("(" + tableCfg.searchable.map(c => `${c} LIKE ?`).join(" OR ") + ")");
+    for (let i=0;i<tableCfg.searchable.length;i++) binds.push(like);
+  }
+
+  // sort: ?sort=column,ASC|DESC
+  const sortParam = searchParams.get("sort");
+  let orderBy = tableCfg.defaultSort || "record_modified DESC";
+  if (sortParam) {
+    const [col, dirRaw] = sortParam.split(",").map(s => (s||"").trim());
+    const dir = (dirRaw || "DESC").toUpperCase();
+    const safeDir = (dir === "ASC" || dir === "DESC") ? dir : "DESC";
+
+    const sortable = new Set([
+      ...(tableCfg.uniqueBy || []),
+      ...(tableCfg.editableCols || []),
+      ...(tableCfg.searchable || []),
+      "record_created","record_modified","rowid",
+    ]);
+    if (col && sortable.has(col)) orderBy = `${col} ${safeDir}`;
+  }
+
+  // pagination
+  const limit = Math.min(Math.max(parseInt(searchParams.get("limit") || "100", 10), 1), 500);
+  const offset = Math.max(parseInt(searchParams.get("offset") || "0", 10), 0);
+
+  return { where, binds, orderBy, limit, offset };
+}
+
+function buildUpsertSQL(tableCfg, body) {
+  const { table, uniqueBy, editableCols, clearableCols } = tableCfg;
+  const now = new Date().toISOString();
+
+  const allInsertCols = [...(uniqueBy || []), ...(editableCols || []), "record_created","record_modified"];
+  const payload = {};
+  for (const c of allInsertCols) {
+    payload[c] = (c === "record_created" || c === "record_modified") ? now : (body[c] ?? null);
+  }
+
+  const rawClears = Array.isArray(body?.clears) ? body.clears : [];
+  const clears = rawClears.filter(k => typeof k === "string" && clearableCols?.has?.(k));
+
+  const updateAssignments = [
+    ...(editableCols || []).map(col => clears.includes(col)
+      ? `${col} = NULL`
+      : `${col} = COALESCE(excluded.${col}, ${table}.${col})`
+    ),
+    `record_modified = ?`,
+  ].join(", ");
+
+  const qMarks = allInsertCols.map(() => "?").join(", ");
+
+  const sql = `
+    INSERT INTO ${table} (${allInsertCols.join(", ")})
+    VALUES (${qMarks})
+    ON CONFLICT(${uniqueBy.join(",")}) DO UPDATE SET
+      ${updateAssignments}
+    RETURNING
+      rowid AS _rid,
+      CASE WHEN rowid = last_insert_rowid() THEN 'insert' ELSE 'update' END AS _action
+  `;
+
+  const binds = [...allInsertCols.map(c => payload[c]), now];
+  return { sql, binds, now, clearsCount: rawClears.length };
+}
+
+// ADDED v1.3.3 — generic handlers used by all tables
+
+async function handlePostUpsert(tableCfg, body, env, logMeta, origin) {
+  // enum checks
+  const ev = ensureEnums(tableCfg, body);
+  if (!ev.ok) {
+    return new Response(JSON.stringify({ success:false, error:"Invalid enum", message: ev.message }), {
+      status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+    });
+  }
+
+  const { sql, binds, clearsCount } = buildUpsertSQL(tableCfg, body);
+  const upsertRes = await env.DB.prepare(sql).bind(...binds).all();
+  const action = upsertRes?.results?.[0]?._action || "unknown";
+
+  await log(env, {
+	level: "info",
+	service: "db1-upsert",
+	message: `Upserted ${tableCfg.table}`,
+	meta: {
+		...logMeta,
+		ok: true,
+		status: 200,
+		table: tableCfg.table,
+		unique: Object.fromEntries((tableCfg.uniqueBy || []).map(k => [k, body?.[k] ?? null])),
+		title: body?.title ?? null,
+		video_type: body?.video_type ?? null,
+		scheduled_at: body?.scheduled_at ?? null,
+		clears_count: clearsCount,
+		action,
+		// ADDED v1.3.3 explicit duration
+		duration_ms: Date.now() - (logMeta?.t0 ?? Date.now())
+	}
+	});
+
+  // COMPAT: Preserve your old /db1/videos POST response shape to avoid breaking existing workers.
+  if (tableCfg.table === "videos") {
+    const now = new Date().toISOString();
+    const db1Data = {
+      title: body?.title ?? null,
+      status: body?.status ?? null,
+      video_type: body?.video_type ?? null,
+      scheduled_at: body?.scheduled_at ?? null,
+      r2_url: body?.r2_url ?? null,
+      r2_transcript_url: body?.r2_transcript_url ?? null,
+      video_filename: body?.video_filename ?? null,
+      content_type: body?.content_type ?? null,
+      file_size_bytes: body?.file_size_bytes ?? null,
+      transcript_id: body?.transcript_id ?? null,
+      planly_media_id: body?.planly_media_id ?? null,
+      social_copy_hook: body?.social_copy_hook ?? null,
+      social_copy_body: body?.social_copy_body ?? null,
+      social_copy_cta: body?.social_copy_cta ?? null,
+      hashtags: body?.hashtags ?? null,
+      record_created: now,
+      record_modified: now,
+    };
+    return new Response(JSON.stringify({ success: true, db1Data, action }), {
+      status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+    });
+  }
+
+  // Default generalized response for other tables
+  return new Response(JSON.stringify({ success: true, action }), {
+    status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+  });
+}
+
+async function handleGetQuery(tableCfg, url, env, logMeta, origin) {
+  const { where, binds, orderBy, limit, offset } = buildQueryParts(tableCfg, url);
+  let sql = `SELECT * FROM ${tableCfg.table}`;
+  if (where.length) sql += ` WHERE ${where.join(" AND ")}`;
+  sql += ` ORDER BY ${orderBy} LIMIT ? OFFSET ?`;
+
+  const results = await env.DB.prepare(sql).bind(...binds, limit, offset).all();
+
+  await log(env, {
+	level: "debug",
+	service: "db1-fetch",
+	message: `GET ${tableCfg.table} ok`,
+	meta: {
+		...logMeta,
+		ok: true,
+		status: 200,
+		table: tableCfg.table,
+		filters_applied: where.length,
+		limit,
+		offset,
+		count: results.results?.length ?? 0,
+		// ADDED v1.3.3 explicit duration
+		duration_ms: Date.now() - (logMeta?.t0 ?? Date.now())
+		}
+	});
+
+
+  return new Response(JSON.stringify(results.results ?? [], null, 2), {
+    headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+  });
+}
+
+async function handleDeleteByUnique(tableCfg, url, env, logMeta, origin) {
+  // Requires each uniqueBy key as a querystring param
+  const binds = [];
+  const where = [];
+  for (const col of (tableCfg.uniqueBy || [])) {
+    const val = url.searchParams.get(col);
+    if (val === null || val === "") {
+      return new Response(JSON.stringify({ success:false, error:`Missing unique key '${col}'` }), {
+        status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+      });
+    }
+    where.push(`${col} = ?`);
+    binds.push(val);
+  }
+  if (!where.length) {
+    return new Response(JSON.stringify({ success:false, error:"No unique keys provided" }), {
+      status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+    });
+  }
+
+  const sql = `DELETE FROM ${tableCfg.table} WHERE ${where.join(" AND ")}`;
+  const res = await env.DB.prepare(sql).bind(...binds).run(); // run() => meta.changes
+
+  await log(env, {
+	level: "info",
+	service: "db1-delete",
+	message: `DELETE ${tableCfg.table}`,
+	meta: {
+		...logMeta,
+		ok: true,
+		status: 200,
+		table: tableCfg.table,
+		unique: Object.fromEntries((tableCfg.uniqueBy || []).map((k,i)=>[k,binds[i]])),
+		changes: res.meta?.changes ?? null,
+		// ADDED v1.3.3 explicit duration
+		duration_ms: Date.now() - (logMeta?.t0 ?? Date.now())
+		}
+	});
+
+  return new Response(JSON.stringify({ success:true, deleted: res.meta?.changes ?? 0 }), {
+    headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+  });
+}
 
 export default {
 	async fetch(request, env, ctx) {
@@ -229,258 +515,101 @@ export default {
 
 //UPSERT code includes time/date stamping for record_created and/or record_modified
 
-		if (request.method === "POST" && url.pathname === "/db1/videos") {
-		try {
-			const body = await request.json();
+// ADDED v1.3.3 — generic /db1/:table router for GET/POST/DELETE (with error logging + t0 for duration)
+const tableKey = parsePathAsTable(url.pathname);
+if (tableKey) {
+  const tableCfg = TABLES[tableKey];
+  if (!tableCfg) {
+    return new Response(JSON.stringify({ success:false, error:`Unknown table '${tableKey}'` }), {
+      status: 400,
+      headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+    });
+  }
 
-			const {
-				title = null,
-				status = null,
-				video_type = null,
-				scheduled_at = null,
-				r2_url = null,
-				r2_transcript_url = null,
-				video_filename = null,
-				content_type = null,
-				file_size_bytes = null,
-				transcript_id = null,
-				planly_media_id = null,
-				social_copy_hook = null,
-				social_copy_body = null,
-				social_copy_cta = null,
-				hashtags = null
-				} = body;
+  if (request.method === "GET") {
+    try {
+      return await handleGetQuery(
+        tableCfg,
+        url,
+        env,
+        { request_id, route: url.pathname, method: request.method, origin, t0 },
+        origin
+      );
+    } catch (err) {
+      await log(env, {
+        level: "error",
+        service: "db1-fetch",
+        message: `GET ${tableCfg.table} failed`,
+        meta: {
+          request_id, route: url.pathname, method: request.method, origin,
+          ok: false, status: 500, error: err?.message, stack: err?.stack,
+          duration_ms: Date.now() - t0
+        }
+      });
+      return new Response(JSON.stringify({ success:false, error: err?.message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+      });
+    }
+  }
 
-			const now = new Date().toISOString();
-			// v1.2.10 ADD: value checks for enums (if provided)
-			if (status !== null && status !== undefined && !ALLOWED_STATUS.has(status)) {
-			return new Response(JSON.stringify({
-				success: false,
-				error: "Invalid status",
-				message: `Status must be one of: ${[...ALLOWED_STATUS].join(", ")}`,
-			}), {
-				status: 400,
-				headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
-			});
-			}
+  if (request.method === "POST") {
+    try {
+      const body = await request.json();
+      return await handlePostUpsert(
+        tableCfg,
+        body,
+        env,
+        { request_id, route: url.pathname, method: request.method, origin, t0 },
+        origin
+      );
+    } catch (err) {
+      await log(env, {
+        level: "warn",
+        service: "db1-upsert",
+        message: `Upsert failed for ${tableCfg.table}`,
+        meta: {
+          request_id, route: url.pathname, method: request.method, origin,
+          ok: false, status: 400, error: err?.message,
+          duration_ms: Date.now() - t0
+        }
+      });
+      return new Response(JSON.stringify({ success:false, error:"Upsert Error", message: err?.message }), {
+        status: 400,
+        headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+      });
+    }
+  }
 
-			if (video_type !== null && video_type !== undefined && !ALLOWED_VIDEO_TYPE.has(video_type)) {
-			return new Response(JSON.stringify({
-				success: false,
-				error: "Invalid video_type",
-				message: `Video type must be one of: ${[...ALLOWED_VIDEO_TYPE].join(", ")}`,
-			}), {
-				status: 400,
-				headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
-			});
-			}
-			const fullPayload = {
-				title,
-				status,
-				video_type,
-				scheduled_at,
-				r2_url,
-				r2_transcript_url,
-				video_filename,
-				content_type,
-				file_size_bytes,
-				transcript_id,
-				planly_media_id,
-				social_copy_hook,
-				social_copy_body,
-				social_copy_cta,
-				hashtags,
-				record_created: now,
-				record_modified: now
-				};
+  if (request.method === "DELETE") {
+    try {
+      return await handleDeleteByUnique(
+        tableCfg,
+        url,
+        env,
+        { request_id, route: url.pathname, method: request.method, origin, t0 },
+        origin
+      );
+    } catch (err) {
+      await log(env, {
+        level: "error",
+        service: "db1-delete",
+        message: `DELETE ${tableCfg.table} failed`,
+        meta: {
+          request_id, route: url.pathname, method: request.method, origin,
+          ok: false, status: 500, error: err?.message, stack: err?.stack,
+          duration_ms: Date.now() - t0
+        }
+      });
+      return new Response(JSON.stringify({ success:false, error: err?.message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+      });
+    }
+  }
 
-// v1.2.9 ADD: sanitize clears[]
-const rawClears = Array.isArray(body?.clears) ? body.clears : [];
-const clears = rawClears
-  .filter((k) => typeof k === "string" && CLEARABLE_COLS.has(k));
-
-	// v1.2.9 CHANGED: dynamic DO UPDATE SET to honor `clears`
-const updateAssignments = [
-  // For each editable column: if in `clears` -> NULL, else COALESCE(excluded.col, videos.col)
-  ...EDITABLE_COLS.map((col) => {
-    if (clears.includes(col)) return `${col} = NULL`;
-    return `${col} = COALESCE(excluded.${col}, videos.${col})`;
-  }),
-  // Always bump record_modified on UPSERT
-  `record_modified = ?`
-].join(",\n                ");
-
-			const stmt = env.DB.prepare(`
-			INSERT INTO videos (
-				title, status, video_type, scheduled_at, r2_url, r2_transcript_url,
-				video_filename, content_type, file_size_bytes, transcript_id,
-				planly_media_id, social_copy_hook, social_copy_body, social_copy_cta,
-				hashtags, record_created, record_modified
-			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(title) DO UPDATE SET
-				${updateAssignments}
-				RETURNING
-					rowid AS _rid,
-					CASE WHEN rowid = last_insert_rowid()
-						THEN 'insert' ELSE 'update' END AS _action
-				`)
-			
-			.bind(
-			fullPayload.title,
-			fullPayload.status,
-			fullPayload.video_type,
-			fullPayload.scheduled_at,
-			fullPayload.r2_url,
-			fullPayload.r2_transcript_url,
-			fullPayload.video_filename,
-			fullPayload.content_type,
-			fullPayload.file_size_bytes,
-			fullPayload.transcript_id,
-			fullPayload.planly_media_id,
-			fullPayload.social_copy_hook,
-			fullPayload.social_copy_body,
-			fullPayload.social_copy_cta,
-			fullPayload.hashtags,
-			fullPayload.record_created,
-			fullPayload.record_modified, // VALUES(... last)
-			fullPayload.record_modified  // for DO UPDATE record_modified = ?
-			);
-
-			const upsertRes = await stmt.all();
-			const action = upsertRes?.results?.[0]?._action || "unknown";
-		
-			await log(env, {
-			level: "info",
-			service: "db1-upsert",
-			message: "Upserted video",
-			meta: {
-				request_id, route: url.pathname, method: request.method,
-				ok: true, status: 200,
-				// domain-safe fields:
-				title, video_type, scheduled_at,
-				clears_count: Array.isArray(body?.clears) ? body.clears.length : 0,
-				action,                  // "insert" | "update" | "unknown"
-				duration_ms: Date.now() - t0
-				}
-			});
-			const db1Data = {
-				title,
-				status,
-				video_type,
-				scheduled_at,
-				r2_url,
-				r2_transcript_url,
-				video_filename,
-				content_type,
-				file_size_bytes,
-				transcript_id,
-				planly_media_id,
-				social_copy_hook,
-				social_copy_body,
-				social_copy_cta,
-				hashtags,
-				record_created: now,
-				record_modified: now
-				};
-
-			return new Response(JSON.stringify({ success: true, db1Data }), {
-				status: 200,
-				headers: { "Content-Type": "application/json",
-				...getCorsHeaders(origin)
-					}
-				});
-
-
-		} catch (err) {					
-			await log(env, {
-				level: "warn",
-				service: "db1-upsert",
-				message: "Upsert failed",
-				meta: {
-					request_id, route: url.pathname, method: request.method,
-					ok: false, status: 400,
-					error: err?.message,
-					duration_ms: Date.now() - t0
-				}
-			});
-
-			return new Response(JSON.stringify({
-				success: false,
-				error: "Upsert Error",
-				message: err.message
-				}), {
-				status: 400,
-				headers: { "Content-Type": "application/json",
-					...getCorsHeaders(origin)
-				}
-				});
-		}
-		}
-
-		// Only handle GET /videos
-		if (request.method === "GET" && url.pathname === "/db1/videos") {
-			try {
-				const { searchParams } = url;
-				const status = searchParams.get("status");
-				const type = searchParams.get("type");
-
-				let query = "SELECT * FROM videos";
-				let conditions = [];
-				let params = [];
-
-				if (status) {
-					conditions.push("status = ?");
-					params.push(status);
-				}
-				if (type) {
-					conditions.push("video_type = ?");
-					params.push(type);
-				}
-
-				if (conditions.length > 0) {
-					query += " WHERE " + conditions.join(" AND ");
-				}
-
-				query += " ORDER BY record_modified DESC";
-
-				const results = await env.DB.prepare(query).bind(...params).all();
-
-				// CHANGED: Apply dynamic CORS headers
-				return new Response(JSON.stringify(results.results, null, 2), {
-					headers: {
-						"Content-Type": "application/json",
-						...getCorsHeaders(origin),
-					},
-				});
-
-			} catch (err) {
-				await log(env, {
-					level: "error",
-					service: "db1-fetch",
-					message: "GET /db1/videos failed",
-					meta: {
-						request_id, route: url.pathname, method: request.method,
-						ok: false, status: 500,
-						error: err?.message, stack: err?.stack,
-						duration_ms: Date.now() - t0
-					}
-				});
-
-				// CHANGED: Apply dynamic CORS headers on error
-				return new Response(JSON.stringify({
-				success: false,
-				error: err.message
-				}), {
-				status: 500,
-				headers: {
-					"Content-Type": "application/json",
-					...getCorsHeaders(origin),
-				},
-				});
-
-			}
-		}
+  return new Response("Method Not Allowed", { status: 405, headers: getCorsHeaders(origin) });
+}
 
 return new Response("Not found", { status: 404, headers: getCorsHeaders(origin) });
 
