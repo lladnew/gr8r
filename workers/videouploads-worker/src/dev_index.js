@@ -1,3 +1,4 @@
+// v1.4.5 gr8r-videouploads-worker ADDED: DEBUG logging tweaks
 // v1.4.4 gr8r-videouploads-worker FIXED: inclued channel ID for puglishing posts and added video_ID
 // v1.4.3 gr8r-videouploads-worker ADDED: schedule rows to Publishing table for all channels listed in upload
 // v1.4.2 gr8r-videouploads-worker ADDED: parsing for Channels list incoming and logging for that
@@ -425,6 +426,9 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
             }
 
             // Insert a Publishing row per matched channel
+            // TEMP: show what we're sending
+            console.log("[videouploads-worker] Publishing payload:", JSON.stringify(pubBody)); //DEBUG
+
             for (const m of matched) {
             const pubStart = now();
             const pubBody = sanitizeForDB1({
@@ -445,12 +449,20 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
             });
 
             if (!pubResp.ok) {
-                try {
+            // TEMP: capture DB1 response body
+            let errText = "";
+            try { errText = await pubResp.text(); } catch {}
+
+            // Console for quick tail reading
+            console.log("[videouploads-worker] Publishing response:", pubResp.status, errText.slice(0, 800));
+
+            // Structured log (short snippet)
+            try {
                 await log(env, {
-                    level: "error",
-                    service: "publishing",
-                    message: "publishing upsert failed",
-                    meta: {
+                level: "error",
+                service: "publishing",
+                message: "publishing upsert failed",
+                meta: {
                     ...baseMeta({ request_id, route, method, origin }),
                     duration_ms: durationMs(pubStart),
                     status: pubResp.status,
@@ -459,12 +471,14 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
                     title: (title || "").slice(0, 120),
                     channel_id: m.channel_id,
                     channel_name: m.name,
-                    scheduled_at: scheduleDateTime || null
-                    }
+                    channel_key: m.key,
+                    video_id: videoId ?? null,
+                    scheduled_at: scheduleDateTime || null,
+                    server_msg: errText.slice(0, 200)
+                }
                 });
-                } catch {}
-                // continue to next channel; do not abort entire request
-                continue;
+            } catch {}
+            continue;
             }
 
             try {
