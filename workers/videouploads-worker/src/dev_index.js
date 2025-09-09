@@ -1,3 +1,4 @@
+// v1.4.4 gr8r-videouploads-worker FIXED: inclued channel ID for puglishing posts and added video_ID
 // v1.4.3 gr8r-videouploads-worker ADDED: schedule rows to Publishing table for all channels listed in upload
 // v1.4.2 gr8r-videouploads-worker ADDED: parsing for Channels list incoming and logging for that
 // v1.4.1 gr8r-videouploads-worker CHANGED: migrate logging to lib/grafana.js with Best Practices and migrate secrets to lib/secrets.js  ADDED: temp cosole log starting line 82 to show the incoming body for testing
@@ -280,6 +281,8 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
         const db1Text = await db1Response.text();
         let db1Data = null;
         try { db1Data = JSON.parse(db1Text); } catch { db1Data = { raw: db1Text }; }
+        //extract video_id when db1-worker returns it
+        const videoId = (db1Data && (db1Data.video_id ?? db1Data.id ?? db1Data.data?.id)) || null;
 
         if (!db1Response.ok) {
         try {
@@ -425,12 +428,12 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
             for (const m of matched) {
             const pubStart = now();
             const pubBody = sanitizeForDB1({
-                // Prefer foreign key when available; include title for traceability
                 video_id: videoId || undefined,
-                title, // keep for human trace; DB side can ignore if not needed
+                title,
                 channel_id: m.channel_id,
+                channel_key: m.key, // REQUIRED by db1-worker
                 scheduled_at: scheduleDateTime
-            });
+                });
 
             const pubResp = await env.DB1.fetch("https://gr8r-db1-worker/db1/publishing", {
                 method: "POST",
