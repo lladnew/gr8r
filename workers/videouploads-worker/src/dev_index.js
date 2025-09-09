@@ -313,6 +313,193 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
             });
         } catch {}
         }
+        // === Publishing rows for selected channels (only when scheduled_at is present) ===
+        try {
+        // Guard: requires schedule AND at least one channel
+        if (!scheduleDateTime || !channelsList.length) {
+            try {
+            await log(env, {
+                level: "info",
+                service: "publishing",
+                message: "publishing skipped",
+                meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                ok: true,
+                status: 200,
+                reason: !scheduleDateTime ? "no_schedule" : "no_channels",
+                scheduled_at: scheduleDateTime || null,
+                channels_count: channelsList.length
+                }
+            });
+            } catch {}
+        } else {
+            // Try to extract a video_id from the DB1 upsert response if available
+            const videoId =
+            (db1Data && (db1Data.id || db1Data.video?.id || db1Data.data?.id)) || null;
+
+            // Fetch channels list from DB1 and match case-insensitively on display_name or key
+            const chStart = now();
+            const channelsResp = await env.DB1.fetch("https://gr8r-db1-worker/db1/channels", {
+            method: "GET",
+            headers: {
+                "Authorization": `Bearer ${db1Key}`
+            }
+            });
+
+            if (!channelsResp.ok) {
+            try {
+                await log(env, {
+                level: "error",
+                service: "channels",
+                message: "channels fetch failed",
+                meta: {
+                    ...baseMeta({ request_id, route, method, origin }),
+                    duration_ms: durationMs(chStart),
+                    status: channelsResp.status,
+                    ok: false,
+                    reason: "channels_fetch_error"
+                }
+                });
+            } catch {}
+            throw new Error(`Channels fetch failed: ${channelsResp.status}`);
+            }
+
+            const chJson = await channelsResp.json(); // expected array: [{ id, key, display_name }, ...]
+            // Build fast lookup map (lowercased)
+            const nameToChannel = new Map();
+            for (const c of Array.isArray(chJson) ? chJson : []) {
+            if (c?.display_name) nameToChannel.set(String(c.display_name).trim().toLowerCase(), c);
+            if (c?.key)          nameToChannel.set(String(c.key).trim().toLowerCase(), c);
+            }
+
+            const matched = [];
+            const unmatched = [];
+            for (const raw of channelsList) {
+            const norm = String(raw).trim().toLowerCase();
+            const hit = nameToChannel.get(norm) || null;
+            if (hit) matched.push({ name: raw, channel_id: hit.id, key: hit.key, display_name: hit.display_name });
+            else unmatched.push(raw);
+            }
+
+            // Log match summary
+            try {
+            await log(env, {
+                level: "info",
+                service: "channels",
+                message: "channels resolved",
+                meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                ok: true,
+                status: 200,
+                channels_requested: channelsList.length,
+                channels_matched: matched.length,
+                channels_unmatched: unmatched.length,
+                // safe to include small arrays here
+                unmatched: unmatched
+                }
+            });
+            } catch {}
+
+            // Log each unmatched as error and skip
+            for (const name of unmatched) {
+            try {
+                await log(env, {
+                level: "error",
+                service: "publishing",
+                message: "channel not found; publishing skipped",
+                meta: {
+                    ...baseMeta({ request_id, route, method, origin }),
+                    ok: false,
+                    status: 404,
+                    reason: "channel_not_found",
+                    channel_name: name,
+                    title: (title || "").slice(0, 120),
+                    scheduled_at: scheduleDateTime || null
+                }
+                });
+            } catch {}
+            }
+
+            // Insert a Publishing row per matched channel
+            for (const m of matched) {
+            const pubStart = now();
+            const pubBody = sanitizeForDB1({
+                // Prefer foreign key when available; include title for traceability
+                video_id: videoId || undefined,
+                title, // keep for human trace; DB side can ignore if not needed
+                channel_id: m.channel_id,
+                scheduled_at: scheduleDateTime
+            });
+
+            const pubResp = await env.DB1.fetch("https://gr8r-db1-worker/db1/publishing", {
+                method: "POST",
+                headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${db1Key}`
+                },
+                body: JSON.stringify(pubBody)
+            });
+
+            if (!pubResp.ok) {
+                try {
+                await log(env, {
+                    level: "error",
+                    service: "publishing",
+                    message: "publishing upsert failed",
+                    meta: {
+                    ...baseMeta({ request_id, route, method, origin }),
+                    duration_ms: durationMs(pubStart),
+                    status: pubResp.status,
+                    ok: false,
+                    reason: "publishing_error",
+                    title: (title || "").slice(0, 120),
+                    channel_id: m.channel_id,
+                    channel_name: m.name,
+                    scheduled_at: scheduleDateTime || null
+                    }
+                });
+                } catch {}
+                // continue to next channel; do not abort entire request
+                continue;
+            }
+
+            try {
+                await log(env, {
+                level: "info",
+                service: "publishing",
+                message: "publishing upsert ok",
+                meta: {
+                    ...baseMeta({ request_id, route, method, origin }),
+                    duration_ms: durationMs(pubStart),
+                    status: 200,
+                    ok: true,
+                    title: (title || "").slice(0, 120),
+                    channel_id: m.channel_id,
+                    channel_name: m.name,
+                    scheduled_at: scheduleDateTime || null,
+                    used_video_id: !!videoId
+                }
+                });
+            } catch {}
+            }
+        }
+        } catch (err) {
+        try {
+            await log(env, {
+            level: "error",
+            service: "publishing",
+            message: "publishing exception",
+            meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                status: 500,
+                ok: false,
+                error: err.message,
+                stack: err.stack
+            }
+            });
+        } catch {}
+        // do not rethrow; publishing is auxiliary to main video flow
+        }
 
         // Rev.ai logic
         const revStart = now();
