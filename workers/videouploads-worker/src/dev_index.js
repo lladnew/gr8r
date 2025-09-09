@@ -1,3 +1,4 @@
+// v1.4.7 gr8r-videouploads-worker FIXED: publishing_status issue
 // v1.4.6 gr8r-videouploads-worker FIXED: video_id issue
 // v1.4.5 gr8r-videouploads-worker ADDED: DEBUG logging tweaks
 // v1.4.4 gr8r-videouploads-worker FIXED: inclued channel ID for puglishing posts and added video_ID
@@ -430,8 +431,9 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
                 title,
                 channel_id: m.channel_id,
                 channel_key: m.key, // REQUIRED by db1-worker
-                scheduled_at: scheduleDateTime
-                });
+                scheduled_at: scheduleDateTime,
+                status: "pending"
+            });
 // TEMP: show what we're sending
 console.log("[videouploads-worker] Publishing payload:", JSON.stringify(pubBody)); //DEBUG
 
