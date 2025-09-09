@@ -1,3 +1,4 @@
+//gr8r-db1-worker v1.3.4 ADD: return video_id for videos
 //gr8r-db1-worker v1.3.3 ADD: generic /db1/:table GET/POST router + DELETE by unique keys; retains videos behavior but significant code mods
 //gr8r-db1-worker v1.3.2 MODIFY: replaced Secret Store process with new getSecret() and Grafana-worker with new log()
 //gr8r-db1-worker v1.3.1 	
@@ -308,9 +309,10 @@ function buildUpsertSQL(tableCfg, body) {
     VALUES (${qMarks})
     ON CONFLICT(${uniqueBy.join(",")}) DO UPDATE SET
       ${updateAssignments}
-    RETURNING
-      rowid AS _rid,
-      CASE WHEN rowid = last_insert_rowid() THEN 'insert' ELSE 'update' END AS _action
+   RETURNING
+    id,
+    rowid AS _rid,
+    CASE WHEN rowid = last_insert_rowid() THEN 'insert' ELSE 'update' END AS _action
   `;
 
   const binds = [...allInsertCols.map(c => payload[c]), now];
@@ -366,6 +368,7 @@ async function handlePostUpsert(tableCfg, body, env, logMeta, origin) {
   // COMPAT: Preserve your old /db1/videos POST response shape to avoid breaking existing workers.
   if (tableCfg.table === "videos") {
     const now = new Date().toISOString();
+    const video_id = upsertRes?.results?.[0]?.id ?? null;
     const db1Data = {
       title: body?.title ?? null,
       status: body?.status ?? null,
@@ -385,7 +388,7 @@ async function handlePostUpsert(tableCfg, body, env, logMeta, origin) {
       record_created: now,
       record_modified: now,
     };
-    return new Response(JSON.stringify({ success: true, db1Data, action }), {
+    return new Response(JSON.stringify({ success: true, db1Data, video_id, action }), {
       status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
     });
   }
@@ -429,7 +432,6 @@ async function handleGetQuery(tableCfg, url, env, logMeta, origin) {
 		duration_ms: Date.now() - (logMeta?.t0 ?? Date.now())
 		}
 	});
-
 
   return new Response(JSON.stringify(results.results ?? [], null, 2), {
     headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
