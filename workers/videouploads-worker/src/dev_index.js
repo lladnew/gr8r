@@ -1,3 +1,4 @@
+// v1.4.3 gr8r-videouploads-worker ADDED: schedule rows to Publishing table for all channels listed in upload
 // v1.4.2 gr8r-videouploads-worker ADDED: parsing for Channels list incoming and logging for that
 // v1.4.1 gr8r-videouploads-worker CHANGED: migrate logging to lib/grafana.js with Best Practices and migrate secrets to lib/secrets.js  ADDED: temp cosole log starting line 82 to show the incoming body for testing
 // v1.4.0 gr8r-videouploads-worker fixes made going live with D1 UPSERT code
