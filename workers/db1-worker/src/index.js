@@ -51,7 +51,7 @@ function getCorsHeaders(origin) {
 	];
 
 	const headers = {
-		"Access-Control-Allow-Headers": "Authorization, Content-Type",
+		"Access-Control-Allow-Headers": "Authorization, Content-Type, Cf-Access-Jwt-Assertion",
 		"Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
 		"Access-Control-Allow-Credentials": "true",
 	};
@@ -107,6 +107,7 @@ const ALLOWED_VIDEO_TYPE = new Set([
   "Other",
   "Unlisted",
 ]);
+
 // ADDED v1.3.3 — per-table configuration & small utilities
 
 /**
@@ -121,6 +122,7 @@ const ALLOWED_VIDEO_TYPE = new Set([
  * - filterMap: querystring -> "SQL_with_1_placeholder"
  */
 const TABLES = {
+  //videos table config
   videos: {
     table: "videos",
     uniqueBy: ["title"],
@@ -139,6 +141,70 @@ const TABLES = {
       since: "record_modified >= ?",
       before: "record_modified < ?",
     },
+  },
+
+  // Publishing table config
+  publishing: {
+    table: "Publishing",   // case-insensitive; keep matching your schema
+    uniqueBy: ["video_id","channel_key"],
+
+    // editable fields for UPSERT (besides timestamps)
+    editableCols: [
+      "scheduled_at",
+      "status",
+      "platform_media_id",
+      "last_error",
+      "posted_at",
+      "options_json"
+    ],
+
+    // Only fields that may be forced to NULL via clears[]
+    // NOTE: posted_at is NOT clearable
+    clearableCols: new Set([
+      "last_error",
+      "platform_media_id",
+      "scheduled_at",
+      "options_json"
+    ]),
+
+    // status enum per your schema comment
+    enumValidators: {
+      status: new Set(["pending","queued","posted","failed","skipped"]),
+      // channel_key validation will be dynamic against Channels table (see handler patch below)
+    },
+
+    searchable: ["channel_key","last_error","options_json"],
+    defaultSort: "record_modified DESC",
+    filterMap: {
+      video_id: "video_id = ?",
+      channel_key: "channel_key = ?",
+      status: "status = ?",
+      since: "record_modified >= ?",
+      before: "record_modified < ?"
+    }
+  },
+  // Channels table config
+  channels: {
+    table: "Channels",             // case-insensitive in D1/SQLite
+    uniqueBy: ["key"],
+
+    editableCols: [
+      "display_name"               // key is immutable; upserts use uniqueBy
+    ],
+
+    clearableCols: new Set([
+      // none; display_name shouldn't be NULL
+    ]),
+
+    // Search, sort, filters
+    searchable: ["key","display_name"],
+    defaultSort: "display_name ASC",
+    filterMap: {
+      id: "id = ?",
+      key: "key = ?",
+      since: "record_modified >= ?",
+      before: "record_modified < ?"
+    }
   },
 
   // Add new tables below by mirroring the shape above
@@ -258,8 +324,19 @@ async function handlePostUpsert(tableCfg, body, env, logMeta, origin) {
   const ev = ensureEnums(tableCfg, body);
   if (!ev.ok) {
     return new Response(JSON.stringify({ success:false, error:"Invalid enum", message: ev.message }), {
-      status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+      status: 422, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
     });
+  }
+  // ADDED v1.3.3 — publishing: validate channel_key dynamically
+  if (tableCfg.table.toLowerCase() === "publishing") {
+    const check = await assertChannelKeyExists(env, body?.channel_key);
+    if (!check.ok) {
+      return new Response(JSON.stringify({ success:false, error:"Invalid channel_key", message: check.message }), {
+        status: 422,
+        headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+      });
+    }
+  
   }
 
   const { sql, binds, clearsCount } = buildUpsertSQL(tableCfg, body);
@@ -317,6 +394,14 @@ async function handlePostUpsert(tableCfg, body, env, logMeta, origin) {
   return new Response(JSON.stringify({ success: true, action }), {
     status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
   });
+}
+// ADDED v1.3.3 — dynamic FK-like check for Channels.key
+async function assertChannelKeyExists(env, channel_key) {
+  if (channel_key == null) return { ok:false, message: "channel_key is required" };
+  const q = `SELECT 1 FROM Channels WHERE key = ? LIMIT 1`; // table name case-insensitive
+  const r = await env.DB.prepare(q).bind(channel_key).all();
+  const exists = Array.isArray(r?.results) && r.results.length > 0;
+  return exists ? { ok:true } : { ok:false, message: `Unknown channel_key: ${channel_key}` };
 }
 
 async function handleGetQuery(tableCfg, url, env, logMeta, origin) {
