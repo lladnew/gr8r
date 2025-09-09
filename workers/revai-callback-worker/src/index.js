@@ -1,3 +1,4 @@
+// v1.4.0 gr8r-revai-callback-worker FIXED: proper acknowledgement of rev.ai callback even if another error like no transcript
 // v1.3.0 gr8r-revai-callback-worker On ANY Social Copy failure status set to 'Hold' instead of 'Pending Schedule'
 // v1.2.9 gr8r-revai-callback-worker adding DB1 UPSERT capabilities
 // v1.2.8 gr8r-revai-callback-worker
@@ -103,14 +104,28 @@ let socialCopyFailed = false;
 
 const checkData = await checkResp.json();
 const found = Array.isArray(checkData.records) && checkData.records.length > 0;
-const alreadyDone = found && checkData.records[0].fields?.Status === 'Transcription Complete';
+
+let alreadyDone = false;
+if (found) {
+  const f = checkData.records[0].fields || {};
+  const processedStatuses = new Set([
+    'Pending Schedule',
+    'Hold',
+    'Scheduled',
+    'Published',
+    'Transcription Complete'
+  ]);
+
+  // Consider processed if we’ve already written the transcript URL OR advanced status
+  alreadyDone = Boolean(f['R2 Transcript URL']) || processedStatuses.has(f.Status);
+}
 
 if (alreadyDone) {
   await logToGrafana(env, 'info', 'Transcript already processed, skipping', {
     job_id: id,
     title
   });
-  return new Response(JSON.stringify({ success: false, reason: 'Already complete' }), { status: 200 });
+  return new Response(JSON.stringify({ success: false, reason: 'Already processed' }), { status: 200 });
 }
 
 // Step 1: Fetch transcript text (plain text)
