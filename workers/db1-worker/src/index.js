@@ -1,3 +1,4 @@
+//gr8r-db1-worker v1.3.5 ADD: "scheduled" as a status for publishing table
 //gr8r-db1-worker v1.3.4 ADD: return video_id for videos
 //gr8r-db1-worker v1.3.3 ADD: generic /db1/:table GET/POST router + DELETE by unique keys; retains videos behavior but significant code mods
 //gr8r-db1-worker v1.3.2 MODIFY: replaced Secret Store process with new getSecret() and Grafana-worker with new log()
@@ -170,7 +171,7 @@ const TABLES = {
 
     // status enum per your schema comment
     enumValidators: {
-      status: new Set(["pending","queued","posted","failed","skipped"]),
+      status: new Set(["pending","queued","scheduled","posted","failed","skipped"]),
       // channel_key validation will be dynamic against Channels table (see handler patch below)
     },
 
