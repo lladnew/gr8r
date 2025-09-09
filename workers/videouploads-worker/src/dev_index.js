@@ -426,9 +426,6 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
             }
 
             // Insert a Publishing row per matched channel
-            // TEMP: show what we're sending
-            console.log("[videouploads-worker] Publishing payload:", JSON.stringify(pubBody)); //DEBUG
-
             for (const m of matched) {
             const pubStart = now();
             const pubBody = sanitizeForDB1({
@@ -438,6 +435,8 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
                 channel_key: m.key, // REQUIRED by db1-worker
                 scheduled_at: scheduleDateTime
                 });
+// TEMP: show what we're sending
+console.log("[videouploads-worker] Publishing payload:", JSON.stringify(pubBody)); //DEBUG
 
             const pubResp = await env.DB1.fetch("https://gr8r-db1-worker/db1/publishing", {
                 method: "POST",
