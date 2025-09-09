@@ -1,3 +1,4 @@
+// v1.4.6 gr8r-videouploads-worker FIXED: video_id issue
 // v1.4.5 gr8r-videouploads-worker ADDED: DEBUG logging tweaks
 // v1.4.4 gr8r-videouploads-worker FIXED: inclued channel ID for puglishing posts and added video_ID
 // v1.4.3 gr8r-videouploads-worker ADDED: schedule rows to Publishing table for all channels listed in upload
@@ -283,7 +284,7 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
         let db1Data = null;
         try { db1Data = JSON.parse(db1Text); } catch { db1Data = { raw: db1Text }; }
         //extract video_id when db1-worker returns it
-        const videoId = (db1Data && (db1Data.video_id ?? db1Data.id ?? db1Data.data?.id)) || null;
+        let videoId = db1Data?.video_id ?? null;
 
         if (!db1Response.ok) {
         try {
@@ -338,10 +339,6 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
             });
             } catch {}
         } else {
-            // Try to extract a video_id from the DB1 upsert response if available
-            const videoId =
-            (db1Data && (db1Data.id || db1Data.video?.id || db1Data.data?.id)) || null;
-
             // Fetch channels list from DB1 and match case-insensitively on display_name or key
             const chStart = now();
             const channelsResp = await env.DB1.fetch("https://gr8r-db1-worker/db1/channels", {
