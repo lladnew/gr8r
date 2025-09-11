@@ -1,3 +1,4 @@
+//gr8r-db1-worker v1.3.6 CHANGE: DELETE allowed by ID or Title rather than just title
 //gr8r-db1-worker v1.3.5 CHANGE: allowed 'Post Ready' as a status in Videos table
 //gr8r-db1-worker v1.3.5 ADD: "scheduled" as a status for publishing table
 //gr8r-db1-worker v1.3.4 ADD: return video_id for videos
@@ -439,6 +440,86 @@ async function handleGetQuery(tableCfg, url, env, logMeta, origin) {
     headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
   });
 }
+// NEW: normalize delete keys from JSON body
+function normalizeDeleteKeys(body) {
+  const ids = new Set();
+  const titles = new Set();
+
+  if (Array.isArray(body?.keys)) {
+    for (const k of body.keys) {
+      if (k?.id != null && k.id !== "") ids.add(Number(k.id));
+      if (typeof k?.title === "string" && k.title.trim()) titles.add(k.title.trim());
+    }
+  }
+  if (Array.isArray(body?.ids)) {
+    for (const v of body.ids) {
+      if (v != null && v !== "") ids.add(Number(v));
+    }
+  }
+  if (Array.isArray(body?.titles)) {
+    for (const t of body.titles) {
+      if (typeof t === "string" && t.trim()) titles.add(t.trim());
+    }
+  }
+
+  return { ids: Array.from(ids), titles: Array.from(titles) };
+}
+
+// NEW: bulk delete by id and/or title with parameterized IN-lists
+async function handleBulkDeleteByBody(tableCfg, request, env, logMeta, origin) {
+  let body = {};
+
+  try {
+    body = await request.json();
+  } catch (_) {
+    return new Response(JSON.stringify({ success:false, error:"Expected JSON body" }), {
+      status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+    });
+  }
+
+  const { ids, titles } = normalizeDeleteKeys(body);
+  if (!ids.length && !titles.length) {
+    return new Response(JSON.stringify({ success:false, error:"Provide at least one id or title" }), {
+      status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+    });
+  }
+
+  let totalDeleted = 0;
+
+  if (ids.length) {
+    const qMarks = ids.map(() => "?").join(",");
+    const sql = `DELETE FROM ${tableCfg.table} WHERE id IN (${qMarks})`;
+    const r = await env.DB.prepare(sql).bind(...ids).run();
+    totalDeleted += r.meta?.changes ?? 0;
+  }
+
+  if (titles.length) {
+    const qMarks = titles.map(() => "?").join(",");
+    const sql = `DELETE FROM ${tableCfg.table} WHERE title IN (${qMarks})`;
+    const r = await env.DB.prepare(sql).bind(...titles).run();
+    totalDeleted += r.meta?.changes ?? 0;
+  }
+
+  await log(env, {
+    level: "info",
+    service: "db1-delete",
+    message: `DELETE ${tableCfg.table} (bulk by body)`,
+    meta: {
+      ...logMeta,
+      ok: true,
+      status: 200,
+      table: tableCfg.table,
+      ids: ids.length,
+      titles: titles.length,
+      deleted: totalDeleted,
+      duration_ms: Date.now() - (logMeta?.t0 ?? Date.now()),
+    }
+  });
+
+  return new Response(JSON.stringify({ success:true, deleted: totalDeleted }), {
+    status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+  });
+}
 
 async function handleDeleteByUnique(tableCfg, url, env, logMeta, origin) {
   // Requires each uniqueBy key as a querystring param
@@ -672,6 +753,20 @@ if (tableKey) {
 
   if (request.method === "DELETE") {
     try {
+      // Try JSON body bulk-delete first (ids/titles/keys)
+      const ct = request.headers.get("Content-Type") || "";
+      if (ct.includes("application/json")) {
+        // Peek body safely; if invalid JSON, helper will return 400
+        return await handleBulkDeleteByBody(
+          tableCfg,
+          request,
+          env,
+          { request_id, route: url.pathname, method: request.method, origin, t0 },
+          origin
+        );
+      }
+
+      // Fallback: legacy querystring unique delete (e.g., ?title=...)
       return await handleDeleteByUnique(
         tableCfg,
         url,
@@ -696,6 +791,7 @@ if (tableKey) {
       });
     }
   }
+
 
   return new Response("Method Not Allowed", { status: 405, headers: getCorsHeaders(origin) });
 }
