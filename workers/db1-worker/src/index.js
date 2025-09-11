@@ -237,6 +237,12 @@ function ensureEnums(tableCfg, body) {
   }
   return { ok:true };
 }
+function pickUniqueForBody(tableCfg, body) {
+  // If the request body has a non-null id, prefer id as the conflict target.
+  if (body && body.id != null) return ["id"];
+  // Otherwise fall back to the table’s configured uniqueBy (e.g., ["title"])
+  return tableCfg.uniqueBy || ["title"];
+}
 
 function buildQueryParts(tableCfg, url) {
   const { searchParams } = url;
@@ -285,13 +291,15 @@ function buildQueryParts(tableCfg, url) {
 }
 
 function buildUpsertSQL(tableCfg, body) {
-  const { table, uniqueBy, editableCols, clearableCols } = tableCfg;
+  const { table, editableCols, clearableCols } = tableCfg;
+  const uniqueCols = pickUniqueForBody(tableCfg, body);   // <-- NEW
   const now = new Date().toISOString();
 
-  const allInsertCols = [...(uniqueBy || []), ...(editableCols || []), "record_created","record_modified"];
+  // Insert columns include the chosen unique cols, plus editables and timestamps
+  const allInsertCols = [...uniqueCols, ...(editableCols || []), "record_created","record_modified"];
   const payload = {};
   for (const c of allInsertCols) {
-    payload[c] = (c === "record_created" || c === "record_modified") ? now : (body[c] ?? null);
+    payload[c] = (c === "record_created" || c === "record_modified") ? now : (body?.[c] ?? null);
   }
 
   const rawClears = Array.isArray(body?.clears) ? body.clears : [];
@@ -306,16 +314,17 @@ function buildUpsertSQL(tableCfg, body) {
   ].join(", ");
 
   const qMarks = allInsertCols.map(() => "?").join(", ");
+  const conflictTarget = uniqueCols.join(",");             // <-- NEW
 
   const sql = `
     INSERT INTO ${table} (${allInsertCols.join(", ")})
     VALUES (${qMarks})
-    ON CONFLICT(${uniqueBy.join(",")}) DO UPDATE SET
+    ON CONFLICT(${conflictTarget}) DO UPDATE SET
       ${updateAssignments}
-   RETURNING
-    id,
-    rowid AS _rid,
-    CASE WHEN rowid = last_insert_rowid() THEN 'insert' ELSE 'update' END AS _action
+    RETURNING
+      id,
+      rowid AS _rid,
+      CASE WHEN rowid = last_insert_rowid() THEN 'insert' ELSE 'update' END AS _action
   `;
 
   const binds = [...allInsertCols.map(c => payload[c]), now];
