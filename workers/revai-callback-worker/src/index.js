@@ -1,3 +1,4 @@
+// v1.4.1 gr8r-revai-callback-worker CHANGE: changed DB1 UPSERT from 'Pending Schedule' to 'Post Ready' after successful Social Copy
 // v1.4.0 gr8r-revai-callback-worker FIXED: proper acknowledgement of rev.ai callback even if another error like no transcript
 // v1.3.0 gr8r-revai-callback-worker On ANY Social Copy failure status set to 'Hold' instead of 'Pending Schedule'
 // v1.2.9 gr8r-revai-callback-worker adding DB1 UPSERT capabilities
@@ -244,7 +245,7 @@ try {
   throw new Error(`R2 upload failed: ${err.message}`);
 }
 // Step 2.5: Upsert to DB1
-const nextStatus = socialCopyFailed ? 'Hold' : 'Pending Schedule'; // ADDED
+const nextStatus = socialCopyFailed ? 'Hold' : 'Post Ready'; // ADDED
 await logToGrafana(env, 'debug', 'Upserting DB1 record (revai-callback)', {
   title,
   job_id: id,

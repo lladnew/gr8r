@@ -1,3 +1,4 @@
+//dbadmin-react-site/VideosTable.tsx v1.2.0 CHANGE: removed 'Pending Schedule' and replaced 'Scheduled' with 'Post Ready' after successful Social Copy
 //dbadmin-react-site/VideosTable.tsx v1.0.9 Adding Data Validation for status and videotype with dropdown.
 //Adding timezone selection and friendly display of scheduled_at
 //dbadmin-react-site/VideosTable.tsx v1.0.8 ADDED editing (UPSERT) capabilities to page//dbadmin-react-site/VideosTable.tsx v1.0.8 ADDED editing (UPSERT) capabilities to page
@@ -50,8 +51,7 @@ const DEFAULT_SORT_COL = 'record_modified';
 const DEFAULT_SORT: SortingState = [{ id: DEFAULT_SORT_COL, desc: true }];
 // v1.0.9 ADD: enumerations + display helpers
 const STATUS_OPTIONS = [
-  "Scheduled",
-  "Pending Schedule",
+  "Post Ready",
   "Working",
   "Hold",
   "Pending Transcription",
@@ -68,8 +68,7 @@ type StatusType = typeof STATUS_OPTIONS[number];
 type VideoType = typeof VIDEO_TYPE_OPTIONS[number];
 
 const statusPillClasses: Record<StatusType, string> = {
-  "Scheduled": "bg-green-100 text-green-800 border-green-200",
-  "Pending Schedule": "bg-orange-100 text-orange-800 border-orange-200",
+  "Post Ready": "bg-orange-100 text-orange-800 border-orange-200",
   "Working": "bg-blue-100 text-blue-800 border-blue-200",
   "Hold": "bg-red-100 text-red-800 border-red-200",
   "Pending Transcription": "bg-yellow-100 text-yellow-900 border-yellow-200",
