@@ -1,3 +1,4 @@
+//gr8r-db1-worker v1.3.6 FIX: mass updates creating new phantom records
 //gr8r-db1-worker v1.3.6 CHANGE: DELETE allowed by ID or Title rather than just title
 //gr8r-db1-worker v1.3.5 CHANGE: allowed 'Post Ready' as a status in Videos table
 //gr8r-db1-worker v1.3.5 ADD: "scheduled" as a status for publishing table
