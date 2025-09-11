@@ -1,3 +1,4 @@
+//dbadmin-react-site/VideosTable.tsx v1.2.1 EDIT: moved kabab to left side with checkbox for mass edit and removed the kabab and checkbox columns from being changed in view
 //dbadmin-react-site/VideosTable.tsx v1.2.1 ADDED: mass edit and delete capabilities
 //dbadmin-react-site/VideosTable.tsx v1.2.0 CHANGE: removed 'Pending Schedule' and replaced 'Scheduled' with 'Post Ready' after successful Social Copy
 //dbadmin-react-site/VideosTable.tsx v1.0.9 Adding Data Validation for status and videotype with dropdown.
@@ -538,8 +539,9 @@ export default function VideosTable() {
           // v1.0.8 ADD: kebab actions column (sticky right)
        const kebabCol: ColumnDef<RecordType> = {
         id: "_actions",
-        header: () => <div className="w-[56px]" aria-hidden />,
+        enableHiding: false,
         enableSorting: false,
+        header: () => <div className="w-[56px]" aria-hidden />,
         cell: ({ row }) => {
           const rec = row.original as RecordType;
           return (
@@ -591,7 +593,7 @@ const selectCol: ColumnDef<RecordType> = {
     />
   );
 },
-
+  enableHiding: false,
   enableSorting: false,
   cell: ({ row }) => {
     const key = getRowKey(row.original as RecordType);
@@ -626,8 +628,9 @@ const selectCol: ColumnDef<RecordType> = {
   },
 };
 
-// Replace previous return with the selection col added at the left
-return [selectCol, ...baseCols, kebabCol];
+// Left to right: kebab on far left, then checkbox, then the rest
+return [kebabCol, selectCol, ...baseCols];
+
         })()
       );
 
@@ -895,7 +898,7 @@ async function bulkDeleteSelected() {
           isOpen={showColumnModal}
           onClose={() => setShowColumnModal(false)}
           onReset={handleResetColumns}
-          columns={table.getAllLeafColumns()}
+          columns={table.getAllLeafColumns().filter(c => c.id !== "_select" && c.id !== "_actions")}
           title="Edit Visible Columns"
         />
 
@@ -1167,10 +1170,11 @@ async function bulkDeleteSelected() {
                         ? "w-[360px] min-w-[360px] max-w-[360px] "
                         : "") +
                       (header.column.id === "_actions"
-                        ? "sticky right-0 z-20 bg-white w-[56px] min-w-[56px] max-w-[56px] shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.08)]"
+                        ? "sticky left-0 z-20 bg-white w-[56px] min-w-[56px] max-w-[56px] shadow-[inset_-8px_0_8px_-8px_rgba(0,0,0,0.08)]"
                         : header.column.id === "_select"
-                        ? "sticky left-0 z-20 bg-white w-[40px] min-w-[40px] max-w-[40px] shadow-[inset_-8px_0_8px_-8px_rgba(0,0,0,0.08)]"
+                        ? "sticky left-[56px] z-20 bg-white w-[40px] min-w-[40px] max-w-[40px] shadow-[inset_-8px_0_8px_-8px_rgba(0,0,0,0.08)]"
                         : "")
+
                     }
                   >
                     {flexRender(header.column.columnDef.header, header.getContext())}
@@ -1197,10 +1201,11 @@ async function bulkDeleteSelected() {
                         ? "w-[360px] min-w-[360px] max-w-[360px]"     // wider only for scheduled_at
                         : "overflow-hidden text-ellipsis max-w-[200px] ") +
                       (cell.column.id === "_actions"
-                        ? "sticky right-0 z-10 bg-white w-[56px] min-w-[56px] max-w-[56px] shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.08)]"
+                        ? "sticky left-0 z-10 bg-white w-[56px] min-w-[56px] max-w-[56px] shadow-[inset_-8px_0_8px_-8px_rgba(0,0,0,0.08)]"
                         : cell.column.id === "_select"
-                        ? "sticky left-0 z-10 bg-white w-[40px] min-w-[40px] max-w-[40px] shadow-[inset_-8px_0_8px_-8px_rgba(0,0,0,0.08)]"
+                        ? "sticky left-[56px] z-10 bg-white w-[40px] min-w-[40px] max-w-[40px] shadow-[inset_-8px_0_8px_-8px_rgba(0,0,0,0.08)]"
                         : "")
+
                     }
                   >
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
