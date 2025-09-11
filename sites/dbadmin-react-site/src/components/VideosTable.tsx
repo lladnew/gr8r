@@ -1,3 +1,4 @@
+//dbadmin-react-site/VideosTable.tsx v1.2.1 ADDED: mass edit and delete capabilities
 //dbadmin-react-site/VideosTable.tsx v1.2.0 CHANGE: removed 'Pending Schedule' and replaced 'Scheduled' with 'Post Ready' after successful Social Copy
 //dbadmin-react-site/VideosTable.tsx v1.0.9 Adding Data Validation for status and videotype with dropdown.
 //Adding timezone selection and friendly display of scheduled_at
@@ -21,6 +22,62 @@ import {
 } from '@tanstack/react-table';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import ColumnSelectorModal from './ColumnSelectorModal';
+
+type HashtagMode = "replace" | "append" | "remove";
+type BulkResult =
+  | { selKey: string; ok: true }
+  | { selKey: string; ok: false; err: string };
+
+
+// ——— Hashtag helpers (module scope) ———
+// Space-separated storage & display. We also accept commas/semicolons on input.
+function parseHashtags(s: string): string[] {
+  if (!s) return [];
+  const tokens = s
+    .split(/[,\s;]+/)                 // split on commas, any whitespace, or semicolons
+    .map(t => t.trim())
+    .filter(Boolean)
+    .map(t => (t.startsWith("#") ? t : `#${t}`))
+    .map(t => t.replace(/\s+/g, "")); // remove internal spaces inside a tag
+
+  // de-dupe case-insensitively, preserve first seen
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const tok of tokens) {
+    const key = tok.toLowerCase();
+    if (!seen.has(key)) { seen.add(key); out.push(tok); }
+  }
+  return out;
+}
+
+function renderHashtags(tokens: string[]): string {
+  // store/display space-separated tags
+  return tokens.join(" ");
+}
+
+function applyHashtagMode(existing: string | null | undefined, entry: string, mode: HashtagMode): string {
+  const current = parseHashtags(existing || "");
+  const incoming = parseHashtags(entry || "");
+
+  if (mode === "replace") {
+    return renderHashtags(incoming);
+  }
+
+  if (mode === "append") {
+    const map = new Map<string, string>(current.map(h => [h.toLowerCase(), h]));
+    for (const inc of incoming) {
+      const key = inc.toLowerCase();
+      if (!map.has(key)) map.set(key, inc);
+    }
+    return renderHashtags(Array.from(map.values()));
+  }
+
+  // remove
+  const removeSet = new Set(incoming.map(x => x.toLowerCase()));
+  const kept = current.filter(h => !removeSet.has(h.toLowerCase()));
+  return renderHashtags(kept);
+}
+
 
 // v1.0.8 ADD: editing helpers/consts
 const EDITABLE_NO_CLEAR = new Set(["status", "video_type"]);
@@ -264,6 +321,58 @@ export default function VideosTable() {
   useEffect(() => {
     try { localStorage.setItem("tz", tz); } catch {}
   }, [tz]);
+  // v1.3.0 MASS EDIT: selection + bulk state
+  const getRowKey = (r: RecordType): string => (r.id ? String(r.id) : String(r.title));
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [selectAllOnPage, setSelectAllOnPage] = useState(false);
+
+  // Keep live copies for column renderers created once (sync each render)
+  const selectedKeysRef = useRef<Set<string>>(new Set());
+  selectedKeysRef.current = selectedKeys;
+
+  const selectAllOnPageRef = useRef(false);
+  selectAllOnPageRef.current = selectAllOnPage;
+
+
+  // Bulk form state (only these fields are allowed)
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkStatus, setBulkStatus] = useState<StatusType | "">("");
+  const [bulkVideoType, setBulkVideoType] = useState<VideoType | "">("");
+  const [bulkScheduledLocal, setBulkScheduledLocal] = useState<string>(""); // datetime-local
+  const [bulkClearScheduled, setBulkClearScheduled] = useState<boolean>(false);
+
+  const [bulkHashtags, setBulkHashtags] = useState<string>("");
+  const [bulkHashtagsMode, setBulkHashtagsMode] = useState<HashtagMode>("replace");
+  const [bulkClearHashtags, setBulkClearHashtags] = useState<boolean>(false);
+  const [bulkHashtagsNoChange, setBulkHashtagsNoChange] = useState<boolean>(true); // ← NEW
+
+  // Reset bulk inputs to safe defaults
+  const resetBulkForm = React.useCallback(() => {
+    setBulkStatus("");
+    setBulkVideoType("");
+    setBulkScheduledLocal("");
+    setBulkClearScheduled(false);
+
+    setBulkHashtags("");
+    setBulkHashtagsMode("replace");
+    setBulkClearHashtags(false);
+    setBulkHashtagsNoChange(true);
+  }, []);
+
+  const prevSelSizeRef = useRef(0);
+  useEffect(() => {
+    const prev = prevSelSizeRef.current;
+    const curr = selectedKeys.size;
+    // when going from 0 selected -> >0 selected, reset the bulk form
+    if (prev === 0 && curr > 0) resetBulkForm();
+    prevSelSizeRef.current = curr;
+  }, [selectedKeys.size, resetBulkForm]);
+
+  // Confirmations
+  const [confirmBulkSaveOpen, setConfirmBulkSaveOpen] = useState(false);
+  const [confirmBulkDeleteOpen, setConfirmBulkDeleteOpen] = useState(false);
+  const [confirmDeleteInput, setConfirmDeleteInput] = useState("");
+
 
   // If saved/browser tz isn't in curated list, include it at the top so it appears selected.
   const effectiveChoices: TzChoice[] = React.useMemo(() => {
@@ -271,7 +380,6 @@ export default function VideosTable() {
     const pretty = tz.includes("/") ? tz.split("/").pop()!.replace(/_/g, " ") : tz;
     return [{ id: tz, descriptor: pretty }, ...TZ_CHOICES];
   }, [tz]);
-
 
   useEffect(() => {
     if (!columns.length || !sorting.length) return;
@@ -298,6 +406,15 @@ export default function VideosTable() {
     }
   }, [columnVisibility]);
 
+  // v1.3.0: Exit bulk mode & clear selections on filter/sort/page changes
+  useEffect(() => {
+    if (selectedKeys.size) {
+      setSelectedKeys(new Set());
+      setSelectAllOnPage(false);
+      setBulkOpen(false);
+    }
+  }, [globalFilter, sorting, pagination.pageIndex, pagination.pageSize]);
+
   useEffect(() => {
     (async () => {
     
@@ -305,8 +422,6 @@ export default function VideosTable() {
         const res = await fetch(`${API_BASE}/db1/videos`, {
             credentials: import.meta.env.DEV ? 'same-origin' : 'include',
         });
-
-
 
         const records = await res.json();
       if (records.length) {
@@ -330,7 +445,10 @@ export default function VideosTable() {
             accessorKey: key,
             enableSorting: true,
             header: ({ column }) => {
-              const dir = column.getIsSorted();
+          const dir = column.getIsSorted();
+          // v1.3.0: compute page row keys (later used by header checkbox)
+          const pageRowKeys = () => table?.getRowModel().rows.map(r => getRowKey(r.original)) ?? [];
+
               return (
                 <button
                   type="button"
@@ -440,8 +558,76 @@ export default function VideosTable() {
           );
         },
       };
+// v1.3.0: selection checkbox column (sticky left)
+const selectCol: ColumnDef<RecordType> = {
+  id: "_select",
+  header: () => {
+  // Compute dynamically so it reflects current selection
+  const pageKeys = table.getRowModel().rows.map(r => getRowKey(r.original));
+  const allSelectedThisPage =
+    pageKeys.length > 0 && pageKeys.every(k => selectedKeysRef.current.has(k));
 
-          return [...baseCols, kebabCol];
+  return (
+    <input
+      type="checkbox"
+      aria-label="Select all on page"
+      checked={allSelectedThisPage}
+      onChange={(e) => {
+        const checked = e.target.checked;
+        setSelectedKeys((prev) => {
+          const next = new Set(prev);
+          if (checked) {
+            pageKeys.forEach(k => next.add(k));
+          } else {
+            pageKeys.forEach(k => next.delete(k));
+          }
+          // open/close bulk bar
+          setBulkOpen(next.size > 0);
+          // keep the convenience flag in sync (not strictly necessary now)
+          setSelectAllOnPage(checked);
+          return next;
+        });
+      }}
+    />
+  );
+},
+
+  enableSorting: false,
+  cell: ({ row }) => {
+    const key = getRowKey(row.original as RecordType);
+    const checked = selectedKeysRef.current.has(key);
+    return (
+      <input
+        type="checkbox"
+        aria-label={`Select ${row.original.title ?? key}`}
+        checked={checked}
+        onChange={(e) => {
+          const isChecked = e.target.checked;
+          setSelectedKeys((prev) => {
+            const next = new Set(prev);
+            if (isChecked) {
+              next.add(key);
+            } else {
+              next.delete(key);
+            }
+            setBulkOpen(next.size > 0);
+
+            // keep the "select all on page" header in sync with current page
+            const pageKeys = table.getRowModel().rows.map(r => getRowKey(r.original));
+            const allSelectedThisPage =
+              pageKeys.length > 0 && pageKeys.every(k => next.has(k));
+            setSelectAllOnPage(allSelectedThisPage);
+
+            return next;
+          });
+        }}       
+      />
+    );
+  },
+};
+
+// Replace previous return with the selection col added at the left
+return [selectCol, ...baseCols, kebabCol];
         })()
       );
 
@@ -531,6 +717,134 @@ export default function VideosTable() {
           }
           return { ok: true as const };
         }
+async function bulkSaveSelected() {
+  const count = selectedKeys.size;
+  if (!count) return;
+
+  // Build a map for quick row lookup
+  const byKey = new Map<string, RecordType>();
+  data.forEach(r => byKey.set(getRowKey(r), r));
+
+  // Prepare optimistic copy
+  const originalData = data.slice();
+  const nowISO = new Date().toISOString();
+
+  // Compute per-record payloads
+  const jobs: Promise<BulkResult>[] = Array.from(selectedKeys).map(async (selKey: string) => {
+    const rec = byKey.get(selKey);
+    if (!rec) return { selKey, ok: false as const, err: "Missing record in view" };
+
+    const payload: Record<string, any> = {};
+    // identify row
+    if (rec.id != null) payload.id = rec.id;
+    else payload.title = rec.title;
+
+    // status (no clear)
+    if (bulkStatus) payload.status = bulkStatus;
+    // video_type (no clear)
+    if (bulkVideoType) payload.video_type = bulkVideoType;
+
+    // scheduled_at (clear or set)
+    if (bulkClearScheduled) {
+      payload.clears = [...(payload.clears ?? []), "scheduled_at"];
+    } else if (bulkScheduledLocal) {
+      const iso = fromLocalDatetimeInputValue(bulkScheduledLocal);
+      if (iso) payload.scheduled_at = iso;
+    }
+
+    
+    // hashtags (no-change guard; else clear or transform)
+    if (!bulkHashtagsNoChange) {
+      if (bulkClearHashtags) {
+        payload.clears = [...(payload.clears ?? []), "hashtags"];
+      } else if (bulkHashtags.trim()) {
+        const nextTags = applyHashtagMode(rec.hashtags ?? "", bulkHashtags, bulkHashtagsMode);
+        payload.hashtags = nextTags;
+      }
+    }
+
+    // nothing to change? (skip this row)
+    const keysToCheck = Object.keys(payload).filter(k => k !== "id" && k !== "title");
+    const isNoop = keysToCheck.length === 0;
+    if (isNoop) return { selKey, ok: true as const }; // nothing to do
+
+    // optimistic UI
+    setData(prev => prev.map(r => {
+      if (getRowKey(r) !== selKey) return r;
+      const next = { ...r };
+      if (payload.status) next.status = payload.status;
+      if (payload.video_type) next.video_type = payload.video_type;
+      if (payload.scheduled_at) next.scheduled_at = payload.scheduled_at;
+      if (payload.hashtags != null) next.hashtags = payload.hashtags;
+      if (payload.clears?.includes("scheduled_at")) next.scheduled_at = null;
+      if (payload.clears?.includes("hashtags")) next.hashtags = null;
+      next.record_modified = nowISO;
+      return next;
+    }));
+
+    const res = await savePartial(payload);
+    if (!res.ok) {
+      // rollback this one
+      setData(prev => prev.map(r => (getRowKey(r) === selKey ? byKey.get(selKey)! : r)));
+      return { selKey, ok: false as const, err: res.err };
+    }
+    return { selKey, ok: true as const };
+  });
+
+  const results = await Promise.all(jobs);
+
+  // Narrow to the failure shape explicitly
+  function isBulkFailure(r: BulkResult): r is { selKey: string; ok: false; err: string } {
+    return r.ok === false;
+  }
+  const failures = results.filter(isBulkFailure);
+
+  if (failures.length) {
+    alert(
+      `Some rows failed to save (${failures.length}/${count}).\n` +
+      failures.slice(0, 5).map(f => `• ${f.selKey}: ${f.err}`).join("\n") +
+      (failures.length > 5 ? `\n…and ${failures.length - 5} more` : "")
+    );
+  }
+
+  // Done: clear selection + bar
+  setSelectedKeys(new Set());
+  setSelectAllOnPage(false);
+  setBulkOpen(false);
+}
+
+async function bulkDeleteSelected() {
+  const count = selectedKeys.size;
+  if (!count) return;
+
+  const keys = Array.from(selectedKeys);
+  const toSend = keys.map(k => {
+    const rec = data.find(r => getRowKey(r) === k);
+    if (!rec) return null;
+    if (rec.id != null) return { id: rec.id };
+    return { title: rec.title };
+  }).filter(Boolean) as Array<{id?: string|number; title?: string}>;
+
+  const API_BASE = import.meta.env.DEV ? "" : "https://admin.gr8r.com";
+  const res = await fetch(`${API_BASE}/db1/videos`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    credentials: import.meta.env.DEV ? "same-origin" : "include",
+    body: JSON.stringify({ keys: toSend }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    alert(`Delete failed: ${text || `HTTP ${res.status}`}`);
+    return;
+  }
+
+  // optimistic remove
+  setData(prev => prev.filter(r => !selectedKeys.has(getRowKey(r))));
+  setSelectedKeys(new Set());
+  setSelectAllOnPage(false);
+  setBulkOpen(false);
+}
 
   const handleResetColumns = () => {
     const reset = Object.fromEntries(
@@ -649,8 +963,197 @@ export default function VideosTable() {
         {totalRows === 0 ? '0 results' : `Showing ${firstRow}–${lastRow} of ${totalRows}`}
       </div>
     </div>
+    {/* v1.3.0: Bulk Edit bar (sticky top, outside scroller) */}
+    {bulkOpen && selectedKeys.size > 0 && (
+      <div className="sticky top-0 z-40 border-b bg-white">
+        <div className="flex flex-wrap items-end gap-3 p-2">
+          <div className="text-sm mr-3">
+            <strong>{selectedKeys.size}</strong> selected
+          </div>
 
-        <div className="overflow-auto max-h-[calc(100vh-200px)]">
+          {/* Status */}
+          <div>
+            <label className="block text-xs">Status</label>
+            <div className="flex gap-1 flex-wrap">
+              {STATUS_OPTIONS.map(opt => (
+                <button
+                  key={opt}
+                  type="button"
+                  className={`rounded-full border px-2 py-0.5 text-xs ${bulkStatus === opt ? 'ring-2 ring-offset-1' : ''} ${statusPillClasses[opt]}`}
+                  onClick={() => setBulkStatus(prev => prev === opt ? "" : opt)}
+                  title={opt}
+                >
+                  {opt}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Video Type */}
+          <div>
+            <label className="block text-xs">Video type</label>
+            <div className="flex gap-1 flex-wrap">
+              {VIDEO_TYPE_OPTIONS.map(opt => (
+                <button
+                  key={opt}
+                  type="button"
+                  className={`rounded-full border px-2 py-0.5 text-xs ${bulkVideoType === opt ? 'ring-2 ring-offset-1' : ''} ${videoTypePillClasses[opt]}`}
+                  onClick={() => setBulkVideoType(prev => prev === opt ? "" : opt)}
+                  title={opt}
+                >
+                  {opt}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Scheduled_at */}
+          <div>
+            <label className="block text-xs">Scheduled at ({tzMenuLabel(tz)})</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="datetime-local"
+                className="border rounded px-2 py-1 text-sm"
+                value={bulkScheduledLocal}
+                onChange={(e) => {
+                  setBulkScheduledLocal(e.target.value);
+                  setBulkClearScheduled(false);
+                }}
+              />
+              <label className="text-xs inline-flex items-center gap-1">
+                <input
+                  type="checkbox"
+                  checked={bulkClearScheduled}
+                  onChange={(e) => {
+                    setBulkClearScheduled(e.target.checked);
+                    if (e.target.checked) setBulkScheduledLocal("");
+                  }}
+                />
+                Clear
+              </label>
+            </div>
+          </div>
+
+          {/* Hashtags with mode */}
+          <div className="min-w-[280px]">
+            <label className="block text-xs">Hashtags</label>
+
+            <div className="flex items-center gap-3 text-xs mb-1">
+              <label className="inline-flex items-center gap-1">
+                <input
+                  type="radio"
+                  name="hashtagsMode"
+                  checked={bulkHashtagsNoChange}
+                  onChange={() => setBulkHashtagsNoChange(true)}
+                />
+                No change
+              </label>
+              <label className="inline-flex items-center gap-1">
+                <input
+                  type="radio"
+                  name="hashtagsMode"
+                  checked={!bulkHashtagsNoChange && bulkHashtagsMode === "replace"}
+                  onChange={() => { setBulkHashtagsNoChange(false); setBulkHashtagsMode("replace"); }}
+                />
+                Replace All
+              </label>
+              <label className="inline-flex items-center gap-1">
+                <input
+                  type="radio"
+                  name="hashtagsMode"
+                  checked={!bulkHashtagsNoChange && bulkHashtagsMode === "append"}
+                  onChange={() => { setBulkHashtagsNoChange(false); setBulkHashtagsMode("append"); }}
+                />
+                Append
+              </label>
+              <label className="inline-flex items-center gap-1">
+                <input
+                  type="radio"
+                  name="hashtagsMode"
+                  checked={!bulkHashtagsNoChange && bulkHashtagsMode === "remove"}
+                  onChange={() => { setBulkHashtagsNoChange(false); setBulkHashtagsMode("remove"); }}
+                />
+                Remove
+              </label>
+            </div>
+
+            <textarea
+              className="border rounded px-2 py-1 text-sm w-full min-h-10 disabled:bg-gray-50"
+              placeholder="#growth #mindset"        // ← space separated
+              value={bulkHashtags}
+              disabled={bulkHashtagsNoChange}
+              onChange={(e) => {
+                setBulkHashtags(e.target.value);
+                setBulkClearHashtags(false);
+              }}
+            />
+
+            <div className="flex items-center gap-2 mt-1">
+              <label className="text-xs inline-flex items-center gap-1">
+                <input
+                  type="checkbox"
+                  checked={bulkClearHashtags}
+                  disabled={bulkHashtagsNoChange}
+                  onChange={(e) => {
+                    setBulkClearHashtags(e.target.checked);
+                    if (e.target.checked) setBulkHashtags("");
+                  }}
+                />
+                Clear
+              </label>
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              className="px-3 py-1 border rounded"
+              onClick={() => {
+                setSelectedKeys(new Set());
+                setSelectAllOnPage(false);
+                setBulkOpen(false);
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              className="px-3 py-1 border rounded bg-[#003E24] text-white"
+              onClick={() => setConfirmBulkSaveOpen(true)}
+                disabled={
+                  !bulkStatus &&
+                  !bulkVideoType &&
+                  !bulkScheduledLocal &&
+                  !bulkClearScheduled &&
+                  // hashtags only count as a change if NOT "No change" and either clear or text provided
+                  (bulkHashtagsNoChange || (!bulkClearHashtags && !bulkHashtags.trim()))
+                }
+              title="Apply to selected"
+            >
+              Save to {selectedKeys.size} rows
+            </button>
+            <button
+              className="px-3 py-1 border rounded bg-red-600 text-white"
+              onClick={() => setConfirmBulkDeleteOpen(true)}
+            >
+              Delete {selectedKeys.size}
+            </button>
+            <button
+              className="px-3 py-1 border rounded"
+              onClick={resetBulkForm}
+              title="Reset all bulk edit inputs to safe defaults"
+            >
+              Reset form
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+        <div
+          className="overflow-auto max-h-[calc(100vh-200px)]"
+          style={bulkOpen && selectedKeys.size > 0 ? { paddingTop: 56 } : undefined} // ~bar height
+        >
+
           <table className="min-w-[1000px] divide-y divide-gray-300 text-sm table-fixed">
           <thead className="bg-gray-50">
             {table.getHeaderGroups().map(headerGroup => (
@@ -664,7 +1167,9 @@ export default function VideosTable() {
                         ? "w-[360px] min-w-[360px] max-w-[360px] "
                         : "") +
                       (header.column.id === "_actions"
-                        ? "right-0 z-20 shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.08)]"
+                        ? "sticky right-0 z-20 bg-white w-[56px] min-w-[56px] max-w-[56px] shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.08)]"
+                        : header.column.id === "_select"
+                        ? "sticky left-0 z-20 bg-white w-[40px] min-w-[40px] max-w-[40px] shadow-[inset_-8px_0_8px_-8px_rgba(0,0,0,0.08)]"
                         : "")
                     }
                   >
@@ -693,6 +1198,8 @@ export default function VideosTable() {
                         : "overflow-hidden text-ellipsis max-w-[200px] ") +
                       (cell.column.id === "_actions"
                         ? "sticky right-0 z-10 bg-white w-[56px] min-w-[56px] max-w-[56px] shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.08)]"
+                        : cell.column.id === "_select"
+                        ? "sticky left-0 z-10 bg-white w-[40px] min-w-[40px] max-w-[40px] shadow-[inset_-8px_0_8px_-8px_rgba(0,0,0,0.08)]"
                         : "")
                     }
                   >
@@ -918,8 +1425,7 @@ export default function VideosTable() {
                     setData((prev) => prev.map((r) => (r.title === before.title ? before : r)));
                     alert(`Save failed: ${res.err}`);
                     return;
-                  }
-
+                  }                  
                   setEditOpen(false);
                 }}
               >
@@ -972,6 +1478,63 @@ export default function VideosTable() {
           </div>
         </div>
       )}
+      {/* v1.3.0: Confirm bulk save */}
+      {confirmBulkSaveOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center" onClick={() => setConfirmBulkSaveOpen(false)}>
+          <div className="bg-white rounded-xl shadow-xl p-4 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="font-semibold text-lg mb-2">Confirm Bulk Save</div>
+            <p className="text-sm mb-3">
+              You are about to modify <strong>{selectedKeys.size}</strong> records. Are you sure you wish to proceed?
+            </p>
+            <div className="flex justify-end gap-2">
+              <button className="px-3 py-1 border rounded" onClick={() => setConfirmBulkSaveOpen(false)}>No</button>
+              <button
+                className="px-3 py-1 border rounded bg-[#003E24] text-white"
+                onClick={async () => {
+                  setConfirmBulkSaveOpen(false);
+                  await bulkSaveSelected();
+                }}
+              >
+                Yes, modify
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* v1.3.0: Confirm bulk delete (typed YES) */}
+      {confirmBulkDeleteOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center" onClick={() => setConfirmBulkDeleteOpen(false)}>
+          <div className="bg-white rounded-xl shadow-xl p-4 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="font-semibold text-lg mb-2">Confirm Delete</div>
+            <p className="text-sm mb-1">
+              You are about to delete <strong>{selectedKeys.size}</strong> records. This is not reversible.
+            </p>
+            <p className="text-sm mb-3">Type <strong>YES</strong> to continue.</p>
+            <input
+              className="border rounded w-full px-2 py-1"
+              value={confirmDeleteInput}
+              onChange={(e) => setConfirmDeleteInput(e.target.value)}
+              placeholder="YES"
+            />
+            <div className="flex justify-end gap-2 mt-3">
+              <button className="px-3 py-1 border rounded" onClick={() => setConfirmBulkDeleteOpen(false)}>Cancel</button>
+              <button
+                className="px-3 py-1 border rounded bg-red-600 text-white"
+                disabled={confirmDeleteInput !== "YES"}
+                onClick={async () => {
+                  setConfirmBulkDeleteOpen(false);
+                  setConfirmDeleteInput("");
+                  await bulkDeleteSelected();
+                }}
+              >
+                Confirm Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </Tooltip.Provider>
   );
 }
