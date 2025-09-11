@@ -68,7 +68,7 @@ type StatusType = typeof STATUS_OPTIONS[number];
 type VideoType = typeof VIDEO_TYPE_OPTIONS[number];
 
 const statusPillClasses: Record<StatusType, string> = {
-  "Post Ready": "bg-orange-100 text-orange-800 border-orange-200",
+    "Post Ready": "bg-green-100 text-green-800 border-green-200",
   "Working": "bg-blue-100 text-blue-800 border-blue-200",
   "Hold": "bg-red-100 text-red-800 border-red-200",
   "Pending Transcription": "bg-yellow-100 text-yellow-900 border-yellow-200",
