@@ -1,3 +1,4 @@
+// v1.0.3 gr8r-socialcopy-worker simply changed capitalization of default Pivot Year hashtag to match BriannaWeist
 // v1.0.2 gr8r-socialcopy-worker
 // updated line 20 to match any case of the string pivot year
 // tweaked prompt to always include GR8R hashtag
@@ -43,7 +44,7 @@ Align with Gr8ter Things’ brand voice:
 Combine the outputs of Hashtags and Social Media Copy together (including Hook, Body, and Call to Action) and compute the total character count. If it exceeds 500 characters, you must edit one or more outputs to bring it to 500 or fewer characters.
 
 Desired Output Format:
-1) Hashtags: #Trend1 #Trend2 #Trend3 [#GR8R #ThePivotYear #briannawiest if Pivot Year]
+1) Hashtags: #Trend1 #Trend2 #Trend3 [#GR8R #ThePivotYear #BriannaWiest if Pivot Year]
 2) Social Media Copy:
    **Hook:** [Compelling Opener]
    **Body:** [Engaging Message]
