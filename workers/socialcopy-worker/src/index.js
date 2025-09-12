@@ -1,4 +1,4 @@
-// v1.0.3 gr8r-socialcopy-worker simply changed capitalization of default Pivot Year hashtag to match BriannaWeist
+// v1.0.3 gr8r-socialcopy-worker simply changed capitalization of default Pivot Year hashtag to match BriannaWiest
 // v1.0.2 gr8r-socialcopy-worker
 // updated line 20 to match any case of the string pivot year
 // tweaked prompt to always include GR8R hashtag
@@ -24,7 +24,7 @@ export default {
 1. Generate Hashtags
 - Always include the static hashtag: #GR8R
 - ${(isPivotYear
-  ? `Also include these static hashtags: #ThePivotYear #briannawiest and generate 3 additional trending hashtags based on the video’s key themes.`
+  ? `Also include these static hashtags: #ThePivotYear #BriannaWiest and generate 3 additional trending hashtags based on the video’s key themes.`
   : `Generate 5 additional trending hashtags based on the video’s key themes.`)}
 - Ensure all hashtags use CamelCase (e.g., #MindsetShift).
 - Do not repeat or modify static hashtags.
