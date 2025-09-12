@@ -1,7 +1,22 @@
+// v1.4.7 gr8r-videouploads-worker FIXED: publishing_status issue
+// v1.4.6 gr8r-videouploads-worker FIXED: video_id issue
+// v1.4.5 gr8r-videouploads-worker ADDED: DEBUG logging tweaks
+// v1.4.4 gr8r-videouploads-worker FIXED: inclued channel ID for puglishing posts and added video_ID
+// v1.4.3 gr8r-videouploads-worker ADDED: schedule rows to Publishing table for all channels listed in upload
+// v1.4.2 gr8r-videouploads-worker ADDED: parsing for Channels list incoming and logging for that
+// v1.4.1 gr8r-videouploads-worker CHANGED: migrate logging to lib/grafana.js with Best Practices and migrate secrets to lib/secrets.js  ADDED: temp cosole log starting line 82 to show the incoming body for testing
 // v1.4.0 gr8r-videouploads-worker fixes made going live with D1 UPSERT code
 // v1.3.8 gr8r-videouploads-worker added key caching function and updated both DB1 calls to utilize
 // ADDED: utilization of sanitize function for 2nd DB1 call
 // v1.3.7 gr8r-videouploads-worker revised santizeForDB1 function for null and empty values
+
+// Shared libs
+// new getSecret function module
+import { getSecret } from "../../../lib/secrets.js";
+
+// new Grafana logging shared script
+import { createLogger } from "../../../lib/grafana.js";
+const log = createLogger({ source: "gr8r-videouploads-worker" });
 
 function sanitizeForDB1(obj) {
   return Object.fromEntries(
@@ -12,13 +27,13 @@ function sanitizeForDB1(obj) {
     )
   );
 }
-let cachedDB1Key = null;
+// Timing helper functions
+function now() { return Date.now(); }
+function durationMs(t0) { return Date.now() - t0; }
 
-async function getDB1InternalKey(env) {
-  if (!cachedDB1Key) {
-    cachedDB1Key = await env.DB1_INTERNAL_KEY.get();
-  }
-  return cachedDB1Key;
+// Base meta for standardized logging use
+function baseMeta({ request_id, route, method, origin }) {
+  return { request_id, route, method, origin };
 }
 
 export default {
@@ -28,45 +43,156 @@ export default {
     const contentType = request.headers.get('content-type') || 'none';
     console.log('[videouploads-worker] Content-Type:', contentType);
 
+    // ADDED: per-request context for logging
+        const request_id = crypto.randomUUID();
+        const route = new URL(request.url).pathname;
+        const method = request.method;
+        const origin = request.headers.get('origin') || null;
+
+        // ADDED: initial request trace (debug)
+        try {
+        await log(env, {
+            level: "debug",
+            service: "request",
+            message: "request received",
+            meta: {
+            ...baseMeta({ request_id, route, method, origin }),
+            content_type: request.headers.get('content-type') || 'none',
+            ok: true
+            }
+        });
+        } catch {}
+
     if (request.method !== 'POST') {
-      console.log('[videouploads-worker] Non-POST request received:', request.method);
-      return new Response("Method Not Allowed", { status: 405 });
-    }
+        try {
+            await log(env, {
+            level: "warn",
+            service: "request",
+            message: "method not allowed",
+            meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                status: 405,
+                ok: false,
+                reason: "method_not_allowed"
+            }
+            });
+        } catch {}
+        return new Response("Method Not Allowed", { status: 405 });
+        }
 
     const url = new URL(request.url);
     const { pathname } = url;
 
     if (pathname === '/upload-video') {
+        const reqStart = now();
       try {
         // Accept JSON body instead of multipart/form-data
         const body = await request.json();
-        const { filename, title, videoType, scheduleDateTime = "" } = body;
+
+        // TEMP: log full incoming payload for troubleshooting
+        console.log("[videouploads-worker] Incoming request body:", JSON.stringify(body, null, 2));
+
+        const { filename, title, videoType, channels, scheduleDateTime = "" } = body;
+
+        // ADDED: normalize channels -> array of trimmed names
+        const channelsList = Array.isArray(channels)
+        ? channels
+        : String(channels || "")
+            .split(/\r?\n/)        // split on newlines from Shortcut
+            .map(s => s.trim())
+            .filter(Boolean);
+         // Safe parse log
+        try {
+        await log(env, {
+            level: "debug",
+            service: "request",
+            message: "parsed request body",
+            meta: {
+            ...baseMeta({ request_id, route, method, origin }),
+            ok: true,
+            title: (title || "").slice(0, 120),
+            video_type: videoType || null,
+            scheduled_at: scheduleDateTime || null,
+            channels: channelsList || null
+            }
+        });
+        } catch {}
+
+        // TEMP: log normalized channels for verification
+        console.log("[videouploads-worker] Channels (normalized):", JSON.stringify(channelsList));
 
         console.log('[videouploads-worker] Parsed fields:');
         console.log('  title:', title);
         console.log('  videoType:', videoType);
         console.log('  scheduleDateTime:', scheduleDateTime);
         console.log('  filename:', filename);
-
+        
         if (!(filename && title && videoType)) {
-          return new Response("Missing required fields", { status: 400 });
-        }
+        try {
+            await log(env, {
+            level: "warn",
+            service: "request",
+            message: "missing required fields",
+            meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                status: 400,
+                ok: false,
+                reason: "missing_fields",
+                title: title || null,
+                video_type: videoType || null
+                }
+                });
+            } catch {}
+            return new Response("Missing required fields", { status: 400 });
+            }
+
 
         const objectKey = filename; // CHANGED: Using filename directly
         const publicUrl = `https://videos.gr8r.com/${objectKey}`; // CHANGED: Constructing R2 URL
 
         // Check that the file exists in R2 without downloading it
+        const r2CheckStart = now();
         const object = await env.VIDEO_BUCKET.get(objectKey);
         if (!object) {
-          await logToGrafana(env, "error", "R2 file missing", { title, objectKey });
-          return new Response("Video file not found in R2", { status: 404 });
+        try {
+            await log(env, {
+            level: "warn",
+            service: "r2-check",
+            message: "R2 object missing",
+            meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                duration_ms: durationMs(r2CheckStart),
+                status: 404,
+                ok: false,
+                reason: "r2_not_found",
+                object_key: objectKey,
+                title: title.slice(0, 120)
+            }
+            });
+        } catch {}
+        return new Response("Video file not found in R2", { status: 404 });
         }
+        
+        try {
+            await log(env, {
+                level: "info",
+                service: "r2-check",
+                message: "R2 object verified",
+                meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                duration_ms: durationMs(r2CheckStart),
+                status: 200,
+                ok: true,
+                object_key: objectKey,
+                title: title.slice(0, 120)
+                }
+        });
+        } catch {}
 
         // Attempt to read metadata from R2 object
         let contentType = object.httpMetadata?.contentType || "unknown";
         let contentLength = object.size || null;
-        // let humanSize = contentLength ? `${(contentLength / 1048576).toFixed(2)} MB` : null; //commenting out since field is depracated
-
+        const atStart = now();
         // First Airtable update with new fields
         const airtableResponse = await env.AIRTABLE.fetch(new Request("https://internal/api/airtable/update", {
           method: "POST",
@@ -88,21 +214,47 @@ export default {
         }));
 
         let airtableData = null;
+        
         if (airtableResponse.ok) {
-          airtableData = await airtableResponse.json();
+        try { airtableData = await airtableResponse.json(); } catch { airtableData = null; }
+        try {
+            await log(env, {
+            level: "info",
+            service: "airtable-upsert",
+            message: "Airtable upsert ok",
+            meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                duration_ms: durationMs(atStart),
+                status: 200,
+                ok: true,
+                title: title.slice(0, 120),
+                video_type: videoType,
+                scheduled_at: scheduleDateTime || null
+            }
+            });
+        } catch {}
         } else {
-          const text = await airtableResponse.text();
-          await logToGrafana(env, "error", "Airtable create New Video failed", { title, airtableResponseText: text });
-          throw new Error(`Airtable create failed: ${text}`);
+        const atStatus = airtableResponse.status;
+        try {
+            await log(env, {
+            level: "error",
+            service: "airtable-upsert",
+            message: "Airtable upsert failed",
+            meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                duration_ms: durationMs(atStart),
+                status: atStatus,
+                ok: false,
+                reason: "airtable_error",
+                title: title.slice(0, 120)
+            }
+            });
+        } catch {}
+        const text = await airtableResponse.text();
+        throw new Error(`Airtable create failed: ${text}`);
         }
 
-        let db1Data = null;
-        await logToGrafana(env, "info", "Airtable New Video Entry", { 
-          title, 
-          db1response: db1Data
-        });
-
-        // DB1 update to mirror Airtable
+        // DB1 update diverging from Airtable in v1.4.2
 
         const db1Body = sanitizeForDB1({
           title,
@@ -116,40 +268,257 @@ export default {
         });
 
 console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
-        const db1Key = await getDB1InternalKey(env);
+
+        const db1Key = await getSecret(env, 'DB1_INTERNAL_KEY');
+        const db1Start = now();
         const db1Response = await env.DB1.fetch("https://gr8r-db1-worker/db1/videos", {
-          method: "POST",
-          headers: {
+        method: "POST",
+        headers: {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${db1Key}`,
-          },
-          body: JSON.stringify(db1Body),
+        },
+        body: JSON.stringify(db1Body),
         });
 
-                const text = await db1Response.text();
-                
-                try {
-                  db1Data = JSON.parse(text);
-                } catch {
-                  db1Data = { raw: text };
-                }
+        const db1Status = db1Response.status;
+        const db1Text = await db1Response.text();
+        let db1Data = null;
+        try { db1Data = JSON.parse(db1Text); } catch { db1Data = { raw: db1Text }; }
+        //extract video_id when db1-worker returns it
+        let videoId = db1Data?.video_id ?? null;
 
         if (!db1Response.ok) {
-          await logToGrafana(env, "error", "DB1 video upsert failed", {
-            title,
-            db1Status: db1Response.status,
-            db1ResponseText: text
-          });
-          throw new Error(`DB1 update failed: ${text}`);
+        try {
+            await log(env, {
+            level: "error",
+            service: "db1-upsert",
+            message: "DB1 upsert failed",
+            meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                duration_ms: durationMs(db1Start),
+                status: db1Status,
+                ok: false,
+                reason: "db1_error",
+                title: title.slice(0, 120)
+            }
+            });
+        } catch {}
+        throw new Error(`DB1 update failed: ${db1Text}`);
+        } else {
+        try {
+            await log(env, {
+            level: "info",
+            service: "db1-upsert",
+            message: "DB1 upsert ok",
+            meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                duration_ms: durationMs(db1Start),
+                status: db1Status,
+                ok: true,
+                title: title.slice(0, 120)
+            }
+            });
+        } catch {}
+        }
+        // === Publishing rows for selected channels (only when scheduled_at is present) ===
+        try {
+        // Guard: requires schedule AND at least one channel
+        if (!scheduleDateTime || !channelsList.length) {
+            try {
+            await log(env, {
+                level: "info",
+                service: "publishing",
+                message: "publishing skipped",
+                meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                ok: true,
+                status: 200,
+                reason: !scheduleDateTime ? "no_schedule" : "no_channels",
+                scheduled_at: scheduleDateTime || null,
+                channels_count: channelsList.length
+                }
+            });
+            } catch {}
+        } else {
+            // Fetch channels list from DB1 and match case-insensitively on display_name or key
+            const chStart = now();
+            const channelsResp = await env.DB1.fetch("https://gr8r-db1-worker/db1/channels", {
+            method: "GET",
+            headers: {
+                "Authorization": `Bearer ${db1Key}`
+            }
+            });
+
+            if (!channelsResp.ok) {
+            try {
+                await log(env, {
+                level: "error",
+                service: "channels",
+                message: "channels fetch failed",
+                meta: {
+                    ...baseMeta({ request_id, route, method, origin }),
+                    duration_ms: durationMs(chStart),
+                    status: channelsResp.status,
+                    ok: false,
+                    reason: "channels_fetch_error"
+                }
+                });
+            } catch {}
+            throw new Error(`Channels fetch failed: ${channelsResp.status}`);
+            }
+
+            const chJson = await channelsResp.json(); // expected array: [{ id, key, display_name }, ...]
+            // Build fast lookup map (lowercased)
+            const nameToChannel = new Map();
+            for (const c of Array.isArray(chJson) ? chJson : []) {
+            if (c?.display_name) nameToChannel.set(String(c.display_name).trim().toLowerCase(), c);
+            if (c?.key)          nameToChannel.set(String(c.key).trim().toLowerCase(), c);
+            }
+
+            const matched = [];
+            const unmatched = [];
+            for (const raw of channelsList) {
+            const norm = String(raw).trim().toLowerCase();
+            const hit = nameToChannel.get(norm) || null;
+            if (hit) matched.push({ name: raw, channel_id: hit.id, key: hit.key, display_name: hit.display_name });
+            else unmatched.push(raw);
+            }
+
+            // Log match summary
+            try {
+            await log(env, {
+                level: "info",
+                service: "channels",
+                message: "channels resolved",
+                meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                ok: true,
+                status: 200,
+                channels_requested: channelsList.length,
+                channels_matched: matched.length,
+                channels_unmatched: unmatched.length,
+                // safe to include small arrays here
+                unmatched: unmatched
+                }
+            });
+            } catch {}
+
+            // Log each unmatched as error and skip
+            for (const name of unmatched) {
+            try {
+                await log(env, {
+                level: "error",
+                service: "publishing",
+                message: "channel not found; publishing skipped",
+                meta: {
+                    ...baseMeta({ request_id, route, method, origin }),
+                    ok: false,
+                    status: 404,
+                    reason: "channel_not_found",
+                    channel_name: name,
+                    title: (title || "").slice(0, 120),
+                    scheduled_at: scheduleDateTime || null
+                }
+                });
+            } catch {}
+            }
+
+            // Insert a Publishing row per matched channel
+            for (const m of matched) {
+            const pubStart = now();
+            const pubBody = sanitizeForDB1({
+                video_id: videoId || undefined,
+                title,
+                channel_id: m.channel_id,
+                channel_key: m.key, // REQUIRED by db1-worker
+                scheduled_at: scheduleDateTime,
+                status: "pending"
+            });
+// TEMP: show what we're sending
+console.log("[videouploads-worker] Publishing payload:", JSON.stringify(pubBody)); //DEBUG
+
+            const pubResp = await env.DB1.fetch("https://gr8r-db1-worker/db1/publishing", {
+                method: "POST",
+                headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${db1Key}`
+                },
+                body: JSON.stringify(pubBody)
+            });
+
+            if (!pubResp.ok) {
+            // TEMP: capture DB1 response body
+            let errText = "";
+            try { errText = await pubResp.text(); } catch {}
+
+            // Console for quick tail reading
+            console.log("[videouploads-worker] Publishing response:", pubResp.status, errText.slice(0, 800));
+
+            // Structured log (short snippet)
+            try {
+                await log(env, {
+                level: "error",
+                service: "publishing",
+                message: "publishing upsert failed",
+                meta: {
+                    ...baseMeta({ request_id, route, method, origin }),
+                    duration_ms: durationMs(pubStart),
+                    status: pubResp.status,
+                    ok: false,
+                    reason: "publishing_error",
+                    title: (title || "").slice(0, 120),
+                    channel_id: m.channel_id,
+                    channel_name: m.name,
+                    channel_key: m.key,
+                    video_id: videoId ?? null,
+                    scheduled_at: scheduleDateTime || null,
+                    server_msg: errText.slice(0, 200)
+                }
+                });
+            } catch {}
+            continue;
+            }
+
+            try {
+                await log(env, {
+                level: "info",
+                service: "publishing",
+                message: "publishing upsert ok",
+                meta: {
+                    ...baseMeta({ request_id, route, method, origin }),
+                    duration_ms: durationMs(pubStart),
+                    status: 200,
+                    ok: true,
+                    title: (title || "").slice(0, 120),
+                    channel_id: m.channel_id,
+                    channel_name: m.name,
+                    scheduled_at: scheduleDateTime || null,
+                    used_video_id: !!videoId
+                }
+                });
+            } catch {}
+            }
+        }
+        } catch (err) {
+        try {
+            await log(env, {
+            level: "error",
+            service: "publishing",
+            message: "publishing exception",
+            meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                status: 500,
+                ok: false,
+                error: err.message,
+                stack: err.stack
+            }
+            });
+        } catch {}
+        // do not rethrow; publishing is auxiliary to main video flow
         }
 
-        await logToGrafana(env, "info", "DB1 New Video Entry", {
-          title,
-          db1Response: db1Data
-        });
-
-
-        // Rev.ai logic unchanged
+        // Rev.ai logic
+        const revStart = now();
         const revaiResponse = await env.REVAI.fetch(new Request("https://internal/api/revai/transcribe", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -160,96 +529,174 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
           })
         }));
 
-        const revaiJson = await revaiResponse.json();
+        let revaiJson = null;
+        try { revaiJson = await revaiResponse.json(); } catch {}
 
-        if (!revaiResponse.ok || !revaiJson.id) {
-          await logToGrafana(env, "error", "Rev.ai job failed", {
-            title,
-            revaiStatus: revaiResponse.status,
-            revaiResponse: revaiJson
-          });
-          return new Response(JSON.stringify({
+        if (!revaiResponse.ok || !revaiJson?.id) {
+        try {
+            await log(env, {
+            level: "error",
+            service: "revai-submit",
+            message: "Revai submission failed",
+            meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                duration_ms: durationMs(revStart),
+                status: revaiResponse.status,
+                ok: false,
+                reason: "revai_error",
+                title: title.slice(0, 120)
+            }
+            });
+        } catch {}
+        return new Response(JSON.stringify({
             error: "Rev.ai job failed",
             message: revaiJson
-          }), {
+        }), {
             status: 502,
             headers: { "Content-Type": "application/json" }
-          });
+        });
         }
 
-        await logToGrafana(env, "info", "Rev.ai job triggered", { title, revaiJobId: revaiJson.id });
+        try {
+        await log(env, {
+            level: "info",
+            service: "revai-submit",
+            message: "Revai submission ok",
+            meta: {
+            ...baseMeta({ request_id, route, method, origin }),
+            duration_ms: durationMs(revStart),
+            status: 200,
+            ok: true,
+            revai_job_id: revaiJson.id,
+            title: title.slice(0, 120)
+            }
+        });
+        } catch {}
 
-        // Airtable update for Rev.ai Transcript ID
-        await env.AIRTABLE.fetch(new Request("https://internal/api/airtable/update", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        // Airtable update for Rev.ai Transcript ID      
+        const atFollowStart = now();
+        const atFollow = await env.AIRTABLE.fetch(new Request("https://internal/api/airtable/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
             table: "tblQKTuBRVrpJLmJp",
             title,
             fields: {
-              "Status": "Pending Transcription",
-              "Transcript ID": revaiJson.id
+            "Status": "Pending Transcription",
+            "Transcript ID": revaiJson.id
             }
-          })
+        })
         }));
-        await logToGrafana(env, "info", "Transcript ID logged", {
-          title,
-          revaiJobId: revaiJson.id
-        });
+        if (!atFollow.ok) {
+        try {
+            await log(env, {
+            level: "error",
+            service: "airtable-followup",
+            message: "Airtable transcript failed",
+            meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                duration_ms: durationMs(atFollowStart),
+                status: atFollow.status,
+                ok: false,
+                reason: "airtable_error",
+                revai_job_id: revaiJson.id,
+                title: title.slice(0, 120)
+            }
+            });
+        } catch {}
+        } else {
+        try {
+            await log(env, {
+            level: "info",
+            service: "airtable-followup",
+            message: "Airtable transcript ok",
+            meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                duration_ms: durationMs(atFollowStart),
+                status: 200,
+                ok: true,
+                revai_job_id: revaiJson.id,
+                title: title.slice(0, 120)
+            }
+            });
+        } catch {}
+        }
 
         // DB1 follow-up update for Rev.ai job
         try {
-         const db1FollowupBody = sanitizeForDB1({
-          title,
-          status: "Pending Transcription",
-          transcript_id: revaiJson.id
-          });
+        const db1FollowupBody = sanitizeForDB1({
+            title,
+            status: "Pending Transcription",
+            transcript_id: revaiJson.id
+        });
 
-          const db1FollowupResponse = await env.DB1.fetch("https://gr8r-db1-worker/db1/videos", {
-          method: "POST",
-          headers: {
+        const db1FollowStart = now();
+        const db1FollowupResponse = await env.DB1.fetch("https://gr8r-db1-worker/db1/videos", {
+            method: "POST",
+            headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${db1Key}` // Reuse from earlier
-          },
-          body: JSON.stringify(db1FollowupBody)
-          });
+            "Authorization": `Bearer ${db1Key}` // reuse earlier secret
+            },
+            body: JSON.stringify(db1FollowupBody)
+        });
 
-          const text = await db1FollowupResponse.text();
-          let db1FollowupData = null;
-
-        try {
-          db1FollowupData = JSON.parse(text);
-        } catch {
-          db1FollowupData = { raw: text };
-        }
+        const db1FollowStatus = db1FollowupResponse.status;
+        await db1FollowupResponse.text(); // drain body; do not log it
 
         if (!db1FollowupResponse.ok) {
-          await logToGrafana(env, "error", "DB1 transcript update failed", {
-            title,
-            revaiJobId: revaiJson.id,
-            db1Status: db1FollowupResponse.status,
-            db1ResponseText: text
-          });
-          throw new Error(`DB1 transcript update failed: ${text}`);
+            try {
+            await log(env, {
+                level: "error",
+                service: "db1-followup",
+                message: "DB1 transcript failed",
+                meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                duration_ms: durationMs(db1FollowStart),
+                status: db1FollowStatus,
+                ok: false,
+                reason: "db1_error",
+                revai_job_id: revaiJson.id,
+                title: title.slice(0, 120)
+                }
+            });
+            } catch {}
+            throw new Error(`DB1 transcript update failed: status ${db1FollowStatus}`);
         }
 
-        await logToGrafana(env, "info", "DB1 Transcript ID logged", {
-          title,
-          revaiJobId: revaiJson.id,
-          db1Response: db1FollowupData
-        });
-        
+        try {
+            await log(env, {
+            level: "info",
+            service: "db1-followup",
+            message: "DB1 transcript ok",
+            meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                duration_ms: durationMs(db1FollowStart),
+                status: db1FollowStatus,
+                ok: true,
+                revai_job_id: revaiJson.id,
+                title: title.slice(0, 120)
+            }
+            });
+        } catch {}
 
-                } catch (err) {
-                  await logToGrafana(env, "error", "DB1 transcript update exception", {
-                    title,
-                    revaiJobId: revaiJson.id,
-                    error: err.message,
-                    stack: err.stack
-                  });
-                  throw err;
-                }
-
+        } catch (err) {
+        try {
+            await log(env, {
+            level: "error",
+            service: "db1-followup",
+            message: "DB1 transcript exception",
+            meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                status: 500,
+                ok: false,
+                error: err.message,
+                stack: err.stack,
+                title: title ? title.slice(0, 120) : null
+            }
+            });
+        } catch {}
+        throw err;
+        }
 
         // RETAINED: Final response to Apple Shortcut
         const responseBody = {
@@ -266,17 +713,41 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
           db1Data
         };
 
+        try {
+            await log(env, {
+                level: "info",
+                service: "response",
+                message: "request complete",
+                meta: {
+                ...baseMeta({ request_id, route, method, origin }),
+                status: 200,
+                ok: true,
+                duration_ms: durationMs(reqStart),
+                title: title.slice(0, 120)
+                }
+            });
+            } catch {}
+
         return new Response(JSON.stringify(responseBody), {
           status: 200,
           headers: { "Content-Type": "application/json" }
         });
 
       } catch (err) {
-        await logToGrafana(env, "error", "Video upload error", {
-          error: err.message,
-          name: err.name,
-          stack: err.stack
-        });
+        try {
+        await log(env, {
+            level: "error",
+            service: "response",
+            message: "request failed",
+            meta: {
+            ...baseMeta({ request_id, route, method, origin }),
+            status: 500,
+            ok: false,
+            error: err.message,
+            stack: err.stack
+            }
+         });
+        } catch {}
 
         return new Response(JSON.stringify({
           error: "Unhandled upload failure",
@@ -290,27 +761,19 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
       }
     }
 
-    return new Response("Forbidden", { status: 403 });
+    try {
+        await log(env, {
+            level: "warn",
+            service: "request",
+            message: "forbidden route",
+            meta: {
+            ...baseMeta({ request_id, route, method, origin }),
+            status: 403,
+            ok: false,
+            reason: "forbidden_route"
+            }
+        });
+        } catch {}
+        return new Response("Forbidden", { status: 403 });
   }
 };
-
-// RETAINED: Grafana logging function
-async function logToGrafana(env, level, message, meta = {}) {
-  try {
-    await env.GRAFANA.fetch(new Request("https://internal/api/grafana", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        level,
-        message,
-        meta: {
-          source: "gr8r-videouploads-worker",
-          service: "video-upload",
-          ...meta
-        }
-      })
-    }));
-  } catch (err) {
-    console.error("Grafana logging failed", err);
-  }
-}
