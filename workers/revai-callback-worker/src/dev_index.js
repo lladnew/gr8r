@@ -1,4 +1,7 @@
-// v1.4.2 gr8r-revai-callback-worker EDIT: ChatGPT proactively changed my status update to a variable (nextStatus) for error handling and used with Airtable which broke... correcting Airtable update to Pending Schedule
+// v1.4.2 gr8r-revai-callback-worker
+// CHANGE: migrate to lib/grafana.js + lib/secrets.js logging; add request_id & timings; remove raw body/content logging
+// CHANGE: standardize labels (service) & meta (snake_case); keep webhook 200 ACK semantics
+// CHANGE: set next_status = 'Post Ready' on social copy success; 'Hold' on failure (unchanged behavior from 1.4.1)
 // v1.4.1 gr8r-revai-callback-worker CHANGE: changed DB1 UPSERT from 'Pending Schedule' to 'Post Ready' after successful Social Copy
 // v1.4.0 gr8r-revai-callback-worker FIXED: proper acknowledgement of rev.ai callback even if another error like no transcript
 // v1.3.0 gr8r-revai-callback-worker On ANY Social Copy failure status set to 'Hold' instead of 'Pending Schedule'
@@ -25,16 +28,23 @@
 // v1.2.0 gr8r-revai-callback-worker
 // Removed "env.ASSETS.fetch('r2/put') and replaced with direct evn.VIDEO_BUCKET.put(...)
 
-console.log('[revai-callback] Worker loaded'); // Logs when the Worker is initialized (cold start)
+// Shared libs
+// new getSecret function module
+import { getSecret } from "../../../lib/secrets.js";
 
-// cache for DB1 internal key
-let CACHED_DB1_INTERNAL_KEY = null;
+// new Grafana logging shared script
+import { createLogger } from "../../../lib/grafana.js";
+const log = createLogger({ source: "gr8r-revai-callback-worker" });
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === '/api/revai/callback' && request.method === 'POST') {
-      await logToGrafana(env, 'debug', 'Revai-callback triggered');
+       // ADDED: request-scoped context
+      const request_id = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
+      const route = '/api/revai/callback';
+      const method = 'POST';
+      const t0 = Date.now();
 
 let rawBody, body;
 
@@ -42,11 +52,14 @@ let rawBody, body;
 try {
   rawBody = await request.clone().text();
   console.log('[revai-callback] Raw body successfully read'); // <== NEW marker
-  console.log('[revai-callback] Raw body:', rawBody);
 } catch (e) {
-  await logToGrafana(env, 'error', 'Failed to read raw body', {
-    error: e.message
+  await log(env, {
+    service: "callback",
+    level: "error",
+    message: "failed to read request body",
+    meta: { request_id, route, method, ok: false, status_code: 400, reason: "body_read_failed" }
   });
+
   return new Response('Body read failed', { status: 400 });
 }
 
@@ -54,28 +67,48 @@ try {
 try {
   body = JSON.parse(rawBody);
 } catch (e) {
-  await logToGrafana(env, 'error', 'Failed to parse JSON body', {
-    rawBody,
-    error: e.message
+  await log(env, {
+    service: "callback",
+    level: "error",
+    message: "failed to parse json",
+    meta: { request_id, route, method, ok: false, status_code: 400, reason: "bad_json" }
   });
+
   return new Response('Bad JSON', { status: 400 });
 }
 
       const job = body.job;
       if (!job || !job.id || !job.status) {
+        await log(env, {
+          service: "callback",
+          level: "error",
+          message: "missing required job fields",
+          meta: { request_id, route, method, ok: false, status_code: 400, reason: "missing_job_fields" }
+        });
+
         return new Response('Missing required job fields', { status: 400 });
       }
 
       const { id, status, metadata } = job;
       const title = metadata || 'Untitled';
 
-      await logToGrafana(env, 'debug', 'Parsed callback body', {
-        id,
-        status,
-        title
+      await log(env, {
+        service: "callback",
+        level: "debug",
+        message: "rev.ai job completion received",
+        meta: { request_id, route, method, ok: true, job_id: id, status, title }
       });
+
 let fetchResp, fetchText, socialCopy; 
       if (status !== 'transcribed') {
+        if (status === 'failed') {
+          await log(env, {
+            service: "callback",
+            level: "error",
+            message: "rev.ai job failed before transcription",
+            meta: { request_id, route, method, ok: false, status_code: 200, job_id: id, status, reason: "revai_failed_status" }
+          });
+        }
         return new Response('Callback ignored: status not transcribed', { status: 200 });
       }
 
@@ -96,11 +129,13 @@ let socialCopyFailed = false;
 
        if (!checkResp.ok) {
   const errorText = await checkResp.text();
-  await logToGrafana(env, 'error', 'Airtable fetch failed', {
-    job_id: id,
-    status: checkResp.status,
-    response: errorText
+  await log(env, {
+    service: "airtable-update",
+    level: "error",
+    message: "airtable check failed",
+    meta: { request_id, job_id: id, ok: false, status_code: checkResp.status, duration_ms: aDur, reason: "airtable_check_failed" }
   });
+
   return new Response('Airtable check failed', { status: 200 });
 }
 
@@ -123,19 +158,17 @@ if (found) {
 }
 
 if (alreadyDone) {
-  await logToGrafana(env, 'info', 'Transcript already processed, skipping', {
-    job_id: id,
-    title
+  await log(env, {
+    service: "airtable-update",
+    level: "info",
+    message: "already processed, skipping",
+    meta: { request_id, job_id: id, title, ok: true, status_code: 200, found: true, already_done: true }
   });
+
   return new Response(JSON.stringify({ success: false, reason: 'Already processed' }), { status: 200 });
 }
 
 // Step 1: Fetch transcript text (plain text)
-await logToGrafana(env, 'debug', 'Sending request to REVAIFETCH', {
-  job_id: id,
-  fetch_payload: { job_id: id }
-});
-
 try {
   fetchResp = await env.REVAIFETCH.fetch('https://internal/api/revai/fetch-transcript', {
     method: 'POST',
@@ -145,29 +178,43 @@ try {
   fetchText = await fetchResp.text();
   } catch (err) {
   console.error('[revai-callback] REVAIFETCH fetch error:', err.message);
-  await logToGrafana(env, 'error', 'REVAIFETCH fetch threw error', {
-    job_id: id,
-    error: err.message
+  await log(env, {
+    service: "revai-fetch",
+    level: "error",
+    message: "revai fetch exception",
+    meta: { request_id, job_id: id, ok: false, duration_ms: fDur, reason: "revai_fetch_exception" }
   });
+
   return new Response('Failed to fetch transcript', { status: 200 });
 }
 
 if (!fetchResp.ok) {
-  await logToGrafana(env, 'error', 'REVAIFETCH returned error response', {
-    job_id: id,
-    status: fetchResp.status,
-    text: fetchText
+  await log(env, {
+    service: "revai-fetch",
+    level: "error",
+    message: "revai fetch error",
+    meta: { request_id, job_id: id, ok: false, status_code: fetchResp.status, duration_ms: fDur, reason: "revai_fetch_bad_status" }
   });
+
   return new Response('Transcript fetch failed', { status: 200 });
 }
 // ADDED: mark failure if transcript is empty/blank
 if (!fetchText || !fetchText.trim()) {
-  await logToGrafana(env, 'error', 'Transcript empty; cannot generate Social Copy', {
-    job_id: id,
-    title
+  await log(env, {
+    service: "revai-fetch",
+    level: "error",
+    message: "transcript empty",
+    meta: { request_id, job_id: id, ok: false, duration_ms: fDur, reason: "transcript_empty" }
   });
+
   socialCopyFailed = true;
 }
+  await log(env, {
+    service: "revai-fetch",
+    level: "info",
+    message: "transcript fetched",
+    meta: { request_id, job_id: id, ok: true, status_code: 200, duration_ms: fDur, transcript_len: fetchText.length }
+  });
 // Step 1.5: Generate Social Copy from transcript
 try {
   const socialCopyResponse = await env.SOCIALCOPY_WORKER.fetch('https://internal/api/socialcopy', {
@@ -178,11 +225,13 @@ try {
 
   if (!socialCopyResponse.ok) {
     const errText = await socialCopyResponse.text();
-    await logToGrafana(env, 'error', 'SocialCopy worker failed', {
-      status: socialCopyResponse.status,
-      response: errText,
-      source: 'revai-callback-worker'
+    await log(env, {
+      service: "socialcopy",
+      level: "error",
+      message: "socialcopy error",
+      meta: { request_id, job_id: id, ok: false, status_code: socialCopyResponse.status, duration_ms: sDur, reason: "socialcopy_bad_status" }
     });
+
     socialCopyFailed = true; // ADDED
   } else {
     socialCopy = await socialCopyResponse.json();
@@ -200,23 +249,37 @@ try {
         title
       });
       socialCopyFailed = true; // ADDED
+    } 
+    const has_hook = !!(socialCopy?.hook && String(socialCopy.hook).trim());
+    const has_body = !!(socialCopy?.body && String(socialCopy.body).trim());
+    const has_cta  = !!(socialCopy?.cta  && String(socialCopy.cta).trim());
+    const has_hashtags = !!(socialCopy?.hashtags && String(socialCopy.hashtags).trim());
+    if (!(has_hook || has_body || has_cta || has_hashtags)) {
+      await log(env, {
+        service: "socialcopy",
+        level: "error",
+        message: "socialcopy empty",
+        meta: { request_id, job_id: id, ok: false, duration_ms: sDur, reason: "socialcopy_empty" }
+      });
+      socialCopyFailed = true;
     } else {
-      console.log('[revai-callback] ✅ Social Copy generated:', JSON.stringify(socialCopy, null, 2));
-      await logToGrafana(env, 'info', 'Received Social Copy from worker', {
-        ...socialCopy,
-        source: 'revai-callback-worker',
-        title
+      await log(env, {
+        service: "socialcopy",
+        level: "info",
+        message: "social copy generated",
+        meta: { request_id, job_id: id, ok: true, status_code: 200, duration_ms: sDur, has_hook, has_body, has_cta, has_hashtags }
       });
     }
+
   }
 } catch (err) {
-  console.error('[revai-callback] 💥 Exception while calling SocialCopy worker:', err);
-  await logToGrafana(env, 'error', 'Exception while calling SocialCopy worker', {
-    message: err.message,
-    stack: err.stack,
-    source: 'revai-callback-worker',
-    title
+  await log(env, {
+    service: "socialcopy",
+    level: "error",
+    message: "socialcopy exception",
+    meta: { request_id, job_id: id, ok: false, duration_ms: sDur, reason: "socialcopy_exception" }
   });
+
   socialCopyFailed = true; // ADDED
 }
 
@@ -232,29 +295,23 @@ if (!socialCopyFailed && (socialCopy?.hook || socialCopy?.body || socialCopy?.ct
   fullTextToUpload += `\n\n${socialCopy.hook || ''}\n${socialCopy.body || ''}\n${socialCopy.cta || ''}\n\n${socialCopy.hashtags || ''}`.trimEnd();
 }
 
-await logToGrafana(env, 'debug', 'Uploading transcript + social copy to R2', {
-  r2_key: r2Key,
-  has_social_copy: !!socialCopy && !socialCopyFailed, // CHANGED
-  social_copy_failed: socialCopyFailed // ADDED
-});
-
 try {
   await env.VIDEO_BUCKET.put(r2Key, fullTextToUpload, {
     httpMetadata: { contentType: 'text/plain' }
   });
+
+  await log(env, {
+    service: "r2-upload",
+    level: "info",
+    message: "r2 upload complete",
+    meta: { request_id, job_id: id, ok: true, duration_ms: rDur, r2_key: r2Key, has_social_copy: !socialCopyFailed }
+  });
+
 } catch (err) {
   throw new Error(`R2 upload failed: ${err.message}`);
 }
 // Step 2.5: Upsert to DB1
 const nextStatus = socialCopyFailed ? 'Hold' : 'Post Ready'; // ADDED
-await logToGrafana(env, 'debug', 'Upserting DB1 record (revai-callback)', {
-  title,
-  job_id: id,
-  r2_transcript_url: r2TranscriptUrl,
-  next_status: nextStatus,           // ADDED
-  social_copy_failed: socialCopyFailed // ADDED
-});
-
 const db1Body = sanitizeForDB1({
   title,
   transcript_id: id,
@@ -290,25 +347,26 @@ try {
 }
 
 if (!db1Resp.ok) {
-  await logToGrafana(env, 'error', 'DB1 video upsert failed (revai-callback)', {
-    title,
-    job_id: id,
-    db1Status: db1Resp.status,
-    db1ResponseText: db1Text
+  await log(env, {
+    service: "db1-upsert",
+    level: "error",
+    message: "db1 upsert failed",
+    meta: { request_id, job_id: id, ok: false, status_code: db1Resp.status, duration_ms: dDur, next_status: nextStatus, title, reason: "db1_upsert_failed" }
   });
+
   throw new Error(`DB1 update failed: ${db1Text}`);
 }
 
-await logToGrafana(env, 'info', 'DB1 update successful (revai-callback)', {
-  title,
-  job_id: id,
-  db1Response: db1Data
+const db1_action = (() => { try { const j = JSON.parse(db1Text); return typeof j?.action === 'string' ? j.action : undefined; } catch { return undefined; } })();
+await log(env, {
+  service: "db1-upsert",
+  level: "info",
+  message: "db1 upsert ok",
+  meta: { request_id, job_id: id, ok: true, status_code: db1Resp.status, duration_ms: dDur, next_status: nextStatus, title, ...(db1_action ? { db1_action } : {}) }
 });
+
        
         // Step 3: Update Airtable
-        await logToGrafana(env, 'debug', 'Updating Airtable record', { title, job_id: id });
-
-        const airtableStatus = socialCopyFailed ? 'Hold' : 'Pending Schedule';
         const airtableResp = await env.AIRTABLE.fetch('https://internal/api/airtable/update', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -318,7 +376,7 @@ await logToGrafana(env, 'info', 'DB1 update successful (revai-callback)', {
             matchValue: id,
             fields: {
               'R2 Transcript URL': r2TranscriptUrl,
-              Status: airtableStatus, // CHANGED: decouple Airtable from DB1
+              Status: nextStatus, // CHANGED
               ...( !socialCopyFailed && socialCopy?.hook && { 'Social Copy Hook': socialCopy.hook } ),
               ...( !socialCopyFailed && socialCopy?.body && { 'Social Copy Body': socialCopy.body } ),
               ...( !socialCopyFailed && socialCopy?.cta && { 'Social Copy Call to Action': socialCopy.cta } ),
@@ -330,29 +388,30 @@ await logToGrafana(env, 'info', 'DB1 update successful (revai-callback)', {
 if (!airtableResp.ok) {
   const errorText = await airtableResp.text();
   console.error('[revai-callback] Airtable update failed:', airtableResp.status, errorText);
-  await logToGrafana(env, 'error', 'Airtable update failed', {
-    title,
-    r2_transcript_url: r2TranscriptUrl,
-    job_id: id,
-    status: airtableResp.status,
-    response: errorText
+  await log(env, {
+    service: "airtable-update",
+    level: "error",
+    message: "airtable update failed",
+    meta: { request_id, job_id: id, ok: false, status_code: airtableResp.status, duration_ms: atDur, title, next_status: nextStatus, reason: "airtable_update_failed" }
   });
+
   throw new Error(`Airtable update failed: ${airtableResp.status} - ${errorText}`);
 }
 
-await logToGrafana(env, 'info', 'Callback completed', {
-  title,
-  job_id: id,
-  next_status: airtableStatus,
-  social_copy_failed: socialCopyFailed
+await log(env, {
+  service: "airtable-update",
+  level: "info",
+  message: "airtable update ok",
+  meta: { request_id, job_id: id, ok: true, status_code: airtableResp.status, duration_ms: atDur, title, next_status: nextStatus }
 });
 
-      } catch (err) {
-        await logToGrafana(env, 'error', 'Callback processing error', {
-          title,
-          job_id: id,
-          error: err.message
-        });
+const total_duration_ms = Date.now() - t0;
+await log(env, {
+  service: "callback",
+  level: "info",
+  message: "transcript and social copy complete",
+  meta: { request_id, job_id: id, title, ok: true, status_code: 200, social_copy_failed: socialCopyFailed, next_status: nextStatus, total_duration_ms }
+});
 
         return new Response(JSON.stringify({ success: false }), {
           status: 200,
@@ -365,35 +424,6 @@ await logToGrafana(env, 'info', 'Callback completed', {
   }
 };
 
-async function logToGrafana(env, level, message, meta = {}) {
-  const payload = {
-    level,
-    message,
-    meta: {
-      source: meta.source || 'gr8r-revai-callback-worker',
-      service: meta.service || 'callback',
-      ...meta
-    }
-  };
-
-  try {
-    const res = await env.GRAFANA.fetch('https://internal/api/grafana', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    const resText = await res.text();
-    console.log('📤 Sent to Grafana:', JSON.stringify(payload));
-    console.log('📨 Grafana response:', res.status, resText);
-
-    if (!res.ok) {
-      throw new Error(`Grafana log failed: ${res.status} - ${resText}`);
-    }
-  } catch (err) {
-    console.error('📛 Logger failed:', err.message, '📤 Original payload:', payload);
-  }
-}
 function sanitizeForDB1(obj) {
   // Remove only undefined, null, and empty strings. Keep Dates and 0/false.
   const out = {};
@@ -406,25 +436,7 @@ function sanitizeForDB1(obj) {
 }
 
 async function getDB1InternalKey(env) {
-  if (CACHED_DB1_INTERNAL_KEY) return CACHED_DB1_INTERNAL_KEY;
-
-  const bound = env.DB1_INTERNAL_KEY;
-  let val;
-
-  if (typeof bound === 'string') {
-    // plain secret binding
-    val = bound;
-  } else if (bound && typeof bound.get === 'function') {
-    // Secrets Store binding
-    val = await bound.get();
-  } else {
-    throw new Error('DB1_INTERNAL_KEY binding missing or invalid');
-  }
-
-  val = (val || '').trim();
-  if (!val) throw new Error('DB1_INTERNAL_KEY empty after resolution');
-
-  CACHED_DB1_INTERNAL_KEY = val;
-  return val;
+  const key = await getSecret(env, "DB1_INTERNAL_KEY");
+  if (!key) throw new Error('DB1_INTERNAL_KEY empty after resolution');
+  return key;
 }
-
