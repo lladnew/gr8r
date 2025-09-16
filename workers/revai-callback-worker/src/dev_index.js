@@ -1,7 +1,8 @@
-// v1.4.2 gr8r-revai-callback-worker
+// v1.4.3 gr8r-revai-callback-worker
 // CHANGE: migrate to lib/grafana.js + lib/secrets.js logging; add request_id & timings; remove raw body/content logging
 // CHANGE: standardize labels (service) & meta (snake_case); keep webhook 200 ACK semantics
 // CHANGE: set next_status = 'Post Ready' on social copy success; 'Hold' on failure (unchanged behavior from 1.4.1)
+// v1.4.2 gr8r-revai-callback-worker EDIT: ChatGPT proactively changed my status update to a variable (nextStatus) for error handling and used with Airtable which broke... correcting Airtable update to Pending Schedule
 // v1.4.1 gr8r-revai-callback-worker CHANGE: changed DB1 UPSERT from 'Pending Schedule' to 'Post Ready' after successful Social Copy
 // v1.4.0 gr8r-revai-callback-worker FIXED: proper acknowledgement of rev.ai callback even if another error like no transcript
 // v1.3.0 gr8r-revai-callback-worker On ANY Social Copy failure status set to 'Hold' instead of 'Pending Schedule'
@@ -48,10 +49,9 @@ export default {
 
 let rawBody, body;
 
-// Step 1: Try to get raw text safely
+// Try to get raw text safely
 try {
   rawBody = await request.clone().text();
-  console.log('[revai-callback] Raw body successfully read'); // <== NEW marker
 } catch (e) {
   await log(env, {
     service: "callback",
@@ -63,7 +63,7 @@ try {
   return new Response('Body read failed', { status: 400 });
 }
 
-// Step 2: Try to parse JSON
+// Try to parse JSON
 try {
   body = JSON.parse(rawBody);
 } catch (e) {
@@ -116,7 +116,7 @@ let socialCopyFailed = false;
 
       try {
         // Step 0: Check Airtable for existing record
-        
+        const a0 = Date.now();      
         const checkResp = await env.AIRTABLE.fetch('https://internal/api/airtable/get', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -126,18 +126,18 @@ let socialCopyFailed = false;
             matchValue: id
           })
         });
+        const aDur = Date.now() - a0;
+    
+        if (!checkResp.ok) {
+        await log(env, {
+            service: "airtable-update",
+            level: "error",
+            message: "airtable check failed",
+            meta: { request_id, job_id: id, ok: false, status_code: checkResp.status, duration_ms: aDur, reason: "airtable_check_failed" }
+        });
 
-       if (!checkResp.ok) {
-  const errorText = await checkResp.text();
-  await log(env, {
-    service: "airtable-update",
-    level: "error",
-    message: "airtable check failed",
-    meta: { request_id, job_id: id, ok: false, status_code: checkResp.status, duration_ms: aDur, reason: "airtable_check_failed" }
-  });
-
-  return new Response('Airtable check failed', { status: 200 });
-}
+        return new Response('Airtable check failed', { status: 200 });
+        }
 
 const checkData = await checkResp.json();
 const found = Array.isArray(checkData.records) && checkData.records.length > 0;
@@ -168,22 +168,29 @@ if (alreadyDone) {
   return new Response(JSON.stringify({ success: false, reason: 'Already processed' }), { status: 200 });
 }
 
+let fDur; // ADDED: will be set after the fetch
+let f0; // ADDED: start time visible to catch
+
 // Step 1: Fetch transcript text (plain text)
 try {
-  fetchResp = await env.REVAIFETCH.fetch('https://internal/api/revai/fetch-transcript', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ job_id: id })
-  });
-  fetchText = await fetchResp.text();
-  } catch (err) {
-  console.error('[revai-callback] REVAIFETCH fetch error:', err.message);
-  await log(env, {
-    service: "revai-fetch",
-    level: "error",
-    message: "revai fetch exception",
-    meta: { request_id, job_id: id, ok: false, duration_ms: fDur, reason: "revai_fetch_exception" }
-  });
+    f0 = Date.now();
+
+    fetchResp = await env.REVAIFETCH.fetch('https://internal/api/revai/fetch-transcript', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: id })
+    });
+    fetchText = await fetchResp.text();
+    fDur = Date.now() - f0; // CHANGED: assign to outer let
+    } catch (err) {
+    fDur = Date.now() - f0; // CHANGED: assign to outer let
+    await log(env, {
+        service: "revai-fetch",
+        level: "error",
+        message: "revai fetch exception",
+        meta: { request_id, job_id: id, ok: false, duration_ms: fDur, reason: "revai_fetch_exception" }
+    });
+
 
   return new Response('Failed to fetch transcript', { status: 200 });
 }
@@ -198,7 +205,6 @@ if (!fetchResp.ok) {
 
   return new Response('Transcript fetch failed', { status: 200 });
 }
-// ADDED: mark failure if transcript is empty/blank
 if (!fetchText || !fetchText.trim()) {
   await log(env, {
     service: "revai-fetch",
@@ -206,110 +212,114 @@ if (!fetchText || !fetchText.trim()) {
     message: "transcript empty",
     meta: { request_id, job_id: id, ok: false, duration_ms: fDur, reason: "transcript_empty" }
   });
-
   socialCopyFailed = true;
-}
+} else {
   await log(env, {
     service: "revai-fetch",
     level: "info",
     message: "transcript fetched",
     meta: { request_id, job_id: id, ok: true, status_code: 200, duration_ms: fDur, transcript_len: fetchText.length }
   });
-// Step 1.5: Generate Social Copy from transcript
-try {
-  const socialCopyResponse = await env.SOCIALCOPY_WORKER.fetch('https://internal/api/socialcopy', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ transcript: fetchText, title })
-  });
+}
 
-  if (!socialCopyResponse.ok) {
-    const errText = await socialCopyResponse.text();
-    await log(env, {
-      service: "socialcopy",
-      level: "error",
-      message: "socialcopy error",
-      meta: { request_id, job_id: id, ok: false, status_code: socialCopyResponse.status, duration_ms: sDur, reason: "socialcopy_bad_status" }
+// Step 1.5: Generate Social Copy from transcript
+if (fetchText && fetchText.trim()) {
+  let sDur;
+  const s0 = Date.now();
+  try {
+    const socialCopyResponse = await env.SOCIALCOPY_WORKER.fetch('https://internal/api/socialcopy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transcript: fetchText, title })
     });
 
-    socialCopyFailed = true; // ADDED
-  } else {
-    socialCopy = await socialCopyResponse.json();
-
-    // ADDED: validate payload has at least one meaningful field
-    const hasAny =
-      (socialCopy?.hook && String(socialCopy.hook).trim()) ||
-      (socialCopy?.body && String(socialCopy.body).trim()) ||
-      (socialCopy?.cta && String(socialCopy.cta).trim()) ||
-      (socialCopy?.hashtags && String(socialCopy.hashtags).trim());
-
-    if (!hasAny) {
-      await logToGrafana(env, 'error', 'SocialCopy worker returned empty content', {
-        source: 'revai-callback-worker',
-        title
-      });
-      socialCopyFailed = true; // ADDED
-    } 
-    const has_hook = !!(socialCopy?.hook && String(socialCopy.hook).trim());
-    const has_body = !!(socialCopy?.body && String(socialCopy.body).trim());
-    const has_cta  = !!(socialCopy?.cta  && String(socialCopy.cta).trim());
-    const has_hashtags = !!(socialCopy?.hashtags && String(socialCopy.hashtags).trim());
-    if (!(has_hook || has_body || has_cta || has_hashtags)) {
+    if (!socialCopyResponse.ok) {
+      sDur = Date.now() - s0;
       await log(env, {
         service: "socialcopy",
         level: "error",
-        message: "socialcopy empty",
-        meta: { request_id, job_id: id, ok: false, duration_ms: sDur, reason: "socialcopy_empty" }
+        message: "socialcopy error",
+        meta: { request_id, job_id: id, ok: false, status_code: socialCopyResponse.status, duration_ms: sDur, reason: "socialcopy_bad_status" }
       });
       socialCopyFailed = true;
     } else {
-      await log(env, {
-        service: "socialcopy",
-        level: "info",
-        message: "social copy generated",
-        meta: { request_id, job_id: id, ok: true, status_code: 200, duration_ms: sDur, has_hook, has_body, has_cta, has_hashtags }
-      });
+      socialCopy = await socialCopyResponse.json();
+      sDur = Date.now() - s0;
+
+      const has_hook = !!(socialCopy?.hook && String(socialCopy.hook).trim());
+      const has_body = !!(socialCopy?.body && String(socialCopy.body).trim());
+      const has_cta  = !!(socialCopy?.cta  && String(socialCopy.cta).trim());
+      const has_hashtags = !!(socialCopy?.hashtags && String(socialCopy.hashtags).trim());
+
+      if (!(has_hook || has_body || has_cta || has_hashtags)) {
+        await log(env, {
+          service: "socialcopy",
+          level: "error",
+          message: "socialcopy empty",
+          meta: { request_id, job_id: id, ok: false, duration_ms: sDur, reason: "socialcopy_empty" }
+        });
+        socialCopyFailed = true;
+      } else {
+        await log(env, {
+          service: "socialcopy",
+          level: "info",
+          message: "social copy generated",
+          meta: { request_id, job_id: id, ok: true, status_code: 200, duration_ms: sDur, has_hook, has_body, has_cta, has_hashtags }
+        });
+      }
     }
-
+  } catch (err) {
+    sDur = Date.now() - s0;
+    await log(env, {
+      service: "socialcopy",
+      level: "error",
+      message: "socialcopy exception",
+      meta: { request_id, job_id: id, ok: false, duration_ms: sDur, reason: "socialcopy_exception" }
+    });
+    socialCopyFailed = true;
   }
-} catch (err) {
-  await log(env, {
-    service: "socialcopy",
-    level: "error",
-    message: "socialcopy exception",
-    meta: { request_id, job_id: id, ok: false, duration_ms: sDur, reason: "socialcopy_exception" }
-  });
-
-  socialCopyFailed = true; // ADDED
-}
+} // end: only run SocialCopy when transcript present
 
        // Step 2: Upload transcript + Social Copy to R2
 const sanitizedTitle = title.replace(/[^a-zA-Z0-9 _-]/g, "").replace(/\s+/g, "_");
 const r2Key = `transcripts/${sanitizedTitle}.txt`;
 const r2TranscriptUrl = 'https://videos.gr8r.com/' + r2Key;
 
-let fullTextToUpload = fetchText;
+let fullTextToUpload = fetchText || '';
 
 // CHANGED: append social copy only if generated successfully
 if (!socialCopyFailed && (socialCopy?.hook || socialCopy?.body || socialCopy?.cta || socialCopy?.hashtags)) {
   fullTextToUpload += `\n\n${socialCopy.hook || ''}\n${socialCopy.body || ''}\n${socialCopy.cta || ''}\n\n${socialCopy.hashtags || ''}`.trimEnd();
 }
 
-try {
-  await env.VIDEO_BUCKET.put(r2Key, fullTextToUpload, {
-    httpMetadata: { contentType: 'text/plain' }
-  });
+    let rDur; // ADDED
+    let r0;   // ADDED
+    try {
+        r0 = Date.now(); // CHANGED
 
-  await log(env, {
-    service: "r2-upload",
-    level: "info",
-    message: "r2 upload complete",
-    meta: { request_id, job_id: id, ok: true, duration_ms: rDur, r2_key: r2Key, has_social_copy: !socialCopyFailed }
-  });
+        await env.VIDEO_BUCKET.put(r2Key, fullTextToUpload, {
+            httpMetadata: { contentType: 'text/plain' }
+        });
+        rDur = Date.now() - r0; // CHANGED: compute duration
+
+        await log(env, {
+            service: "r2-upload",
+            level: "info",
+            message: "r2 upload complete",
+            meta: { request_id, job_id: id, ok: true, duration_ms: rDur, r2_key: r2Key, has_social_copy: !socialCopyFailed }
+        });
 
 } catch (err) {
+  rDur = Date.now() - r0; // CHANGED: compute duration
+  await log(env, {
+    service: "r2-upload",
+    level: "error",
+    message: "r2 upload failed",
+    meta: { request_id, job_id: id, ok: false, duration_ms: rDur, r2_key: r2Key, reason: "r2_upload_failed" }
+  });
   throw new Error(`R2 upload failed: ${err.message}`);
 }
+
 // Step 2.5: Upsert to DB1
 const nextStatus = socialCopyFailed ? 'Hold' : 'Post Ready'; // ADDED
 const db1Body = sanitizeForDB1({
@@ -328,7 +338,7 @@ const db1Body = sanitizeForDB1({
 });
 
 const db1Key = await getDB1InternalKey(env);
-
+const d0 = Date.now();
 const db1Resp = await env.DB1.fetch('https://gr8r-db1-worker/db1/videos', {
   method: 'POST',
   headers: {
@@ -339,12 +349,7 @@ const db1Resp = await env.DB1.fetch('https://gr8r-db1-worker/db1/videos', {
 });
 
 const db1Text = await db1Resp.text();
-let db1Data;
-try {
-  db1Data = JSON.parse(db1Text);
-} catch {
-  db1Data = { raw: db1Text };
-}
+const dDur = Date.now() - d0;
 
 if (!db1Resp.ok) {
   await log(env, {
@@ -367,6 +372,7 @@ await log(env, {
 
        
         // Step 3: Update Airtable
+        const at0 = Date.now();
         const airtableResp = await env.AIRTABLE.fetch('https://internal/api/airtable/update', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -384,11 +390,11 @@ await log(env, {
             }
           })
         });
+        const atDur = Date.now() - at0;
 
 if (!airtableResp.ok) {
   const errorText = await airtableResp.text();
-  console.error('[revai-callback] Airtable update failed:', airtableResp.status, errorText);
-  await log(env, {
+   await log(env, {
     service: "airtable-update",
     level: "error",
     message: "airtable update failed",
@@ -410,19 +416,33 @@ await log(env, {
   service: "callback",
   level: "info",
   message: "transcript and social copy complete",
-  meta: { request_id, job_id: id, title, ok: true, status_code: 200, social_copy_failed: socialCopyFailed, next_status: nextStatus, total_duration_ms }
+  meta: { request_id, route, method, job_id: id, title, ok: true, status_code: 200, social_copy_failed: socialCopyFailed, next_status: nextStatus, total_duration_ms }
 });
 
-        return new Response(JSON.stringify({ success: false }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-    }
+return new Response(JSON.stringify({ success: true }), {
+  status: 200,
+  headers: { 'Content-Type': 'application/json' }
+});
+} catch (err) { // ADDED: big catch for the whole business logic
+  const total_duration_ms = Date.now() - t0;
+  await log(env, {
+    service: "callback",
+    level: "error",
+    message: "callback processing error",
+    meta: { request_id, route, method, ok: false, status_code: 200, reason: "callback_processing_error", total_duration_ms }
+  });
+  return new Response(JSON.stringify({ success: false }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' }
+  });
+} // <-- closes the big try/catch
 
-    return new Response('Not found', { status: 404 });
-  }
-};
+} // <-- closes: if (url.pathname === ...)
+
+return new Response('Not found', { status: 404 });
+} // <-- closes: async fetch
+
+}; // <-- closes: export default
 
 function sanitizeForDB1(obj) {
   // Remove only undefined, null, and empty strings. Keep Dates and 0/false.
