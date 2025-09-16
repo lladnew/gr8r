@@ -103,7 +103,7 @@ The outer Loki envelope should contain **labels**:
 
 ## Minimal helper API (recommended)
 
-`logToGrafana(env, entry)` where `entry` is:
+`log(env, entry)` where `entry` is:
 
 ```ts
 {
