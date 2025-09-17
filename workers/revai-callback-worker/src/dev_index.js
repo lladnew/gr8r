@@ -1,3 +1,4 @@
+// v1.4.4 gr8r-revai-callback-worker ADDED: update to publishing table to mark rows 'queued' and ready for publishing, tweaked logging
 // v1.4.3 gr8r-revai-callback-worker
 // CHANGE: migrate to lib/grafana.js + lib/secrets.js logging; add request_id & timings; remove raw body/content logging
 // CHANGE: standardize labels (service) & meta (snake_case); keep webhook 200 ACK semantics
@@ -39,6 +40,11 @@ const log = createLogger({ source: "gr8r-revai-callback-worker" });
 
 export default {
   async fetch(request, env, ctx) {
+    let video_id;                 // set in Step 0 (DB1 videos check)
+    let vSuccessMeta = null;      // capture videos-upsert success metrics for later
+    let pSummary = null;          // capture publishing summary for consolidated success
+    let hadPublishingFailure = false;
+
     const url = new URL(request.url);
     if (url.pathname === '/api/revai/callback' && request.method === 'POST') {
        // ADDED: request-scoped context
@@ -47,35 +53,35 @@ export default {
       const method = 'POST';
       const t0 = Date.now();
 
-let rawBody, body;
+    let rawBody, body;
 
-// Try to get raw text safely
-try {
-  rawBody = await request.clone().text();
-} catch (e) {
-  await log(env, {
-    service: "callback",
-    level: "error",
-    message: "failed to read request body",
-    meta: { request_id, route, method, ok: false, status_code: 400, reason: "body_read_failed" }
-  });
+    // Try to get raw text safely
+    try {
+      rawBody = await request.clone().text();
+    } catch (e) {
+      await log(env, {
+        service: "callback",
+        level: "error",
+        message: "failed to read request body",
+        meta: { request_id, route, method, ok: false, status_code: 400, reason: "body_read_failed" }
+      });
 
-  return new Response('Body read failed', { status: 400 });
-}
+      return new Response('Body read failed', { status: 400 });
+    }
 
-// Try to parse JSON
-try {
-  body = JSON.parse(rawBody);
-} catch (e) {
-  await log(env, {
-    service: "callback",
-    level: "error",
-    message: "failed to parse json",
-    meta: { request_id, route, method, ok: false, status_code: 400, reason: "bad_json" }
-  });
+    // Try to parse JSON
+    try {
+      body = JSON.parse(rawBody);
+    } catch (e) {
+      await log(env, {
+        service: "callback",
+        level: "error",
+        message: "failed to parse json",
+        meta: { request_id, route, method, ok: false, status_code: 400, reason: "bad_json" }
+      });
 
-  return new Response('Bad JSON', { status: 400 });
-}
+      return new Response('Bad JSON', { status: 400 });
+    }
 
       const job = body.job;
       if (!job || !job.id || !job.status) {
@@ -115,58 +121,53 @@ let fetchResp, fetchText, socialCopy;
 let socialCopyFailed = false;
 
       try {
-        // Step 0: Check Airtable for existing record
-        const a0 = Date.now();      
-        const checkResp = await env.AIRTABLE.fetch('https://internal/api/airtable/get', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            table: 'tblQKTuBRVrpJLmJp',
-            matchField: 'Transcript ID',
-            matchValue: id
-          })
-        });
-        const aDur = Date.now() - a0;
-    
-        if (!checkResp.ok) {
-        await log(env, {
-            service: "airtable-update",
-            level: "error",
-            message: "airtable check failed",
-            meta: { request_id, job_id: id, ok: false, status_code: checkResp.status, duration_ms: aDur, reason: "airtable_check_failed" }
-        });
+       // Step 0: Check DB1 for existing video by transcript_id; capture video_id and dedupe
+        const db1Key = await getDB1InternalKey(env);
+        const v0 = Date.now();
 
-        return new Response('Airtable check failed', { status: 200 });
+        const videosCheckResp = await env.DB1.fetch(
+          `https://gr8r-db1-worker/db1/videos?transcript_id=${encodeURIComponent(id)}`,
+          { method: 'GET', headers: { 'Authorization': `Bearer ${db1Key}` } }
+        );
+        const vDur = Date.now() - v0;
+
+        if (!videosCheckResp.ok) {
+          await log(env, {
+            service: "db1-videos-check",
+            level: "error",
+            message: "db1 videos check failed",
+            meta: { request_id, job_id: id, ok: false, status_code: videosCheckResp.status, duration_ms: vDur, reason: "db1_videos_check_failed" }
+          });
+          // Acknowledge webhook so rev.ai doesn't spam retries
+          return new Response('DB1 videos check failed', { status: 200 });
         }
 
-const checkData = await checkResp.json();
-const found = Array.isArray(checkData.records) && checkData.records.length > 0;
+        const videosPayload = await videosCheckResp.json();
+        // tolerate either {data: [...] } or plain array
+        const videosArr = Array.isArray(videosPayload?.data) ? videosPayload.data
+                          : Array.isArray(videosPayload) ? videosPayload
+                          : [];
+        const found = videosArr.length > 0;
 
-let alreadyDone = false;
-if (found) {
-  const f = checkData.records[0].fields || {};
-  const processedStatuses = new Set([
-    'Pending Schedule',
-    'Hold',
-    'Scheduled',
-    'Published',
-    'Transcription Complete'
-  ]);
+        video_id = found ? Number(videosArr[0].id) : undefined;
 
-  // Consider processed if we’ve already written the transcript URL OR advanced status
-  alreadyDone = Boolean(f['R2 Transcript URL']) || processedStatuses.has(f.Status);
-}
+        // Consider processed if it’s already Post Ready or already has the transcript URL
+        let alreadyDone = false;
+        if (found) {
+          const rec = videosArr[0] || {};
+          const processedStatuses = new Set(['Post Ready']); // per your new rule
+          alreadyDone = Boolean(rec.r2_transcript_url) || processedStatuses.has(rec.status);
+        }
 
-if (alreadyDone) {
-  await log(env, {
-    service: "airtable-update",
-    level: "info",
-    message: "already processed, skipping",
-    meta: { request_id, job_id: id, title, ok: true, status_code: 200, found: true, already_done: true }
-  });
-
-  return new Response(JSON.stringify({ success: false, reason: 'Already processed' }), { status: 200 });
-}
+        if (alreadyDone) {
+          await log(env, {
+            service: "db1-videos-check",
+            level: "info",
+            message: "already processed, skipping",
+            meta: { request_id, job_id: id, title, ok: true, found: true, already_done: true, ...(video_id ? { video_id } : {}) }
+          });
+          return new Response(JSON.stringify({ success: false, reason: 'Already processed' }), { status: 200 });
+        }
 
 let fDur; // ADDED: will be set after the fetch
 let f0; // ADDED: start time visible to catch
@@ -337,7 +338,6 @@ const db1Body = sanitizeForDB1({
   })
 });
 
-const db1Key = await getDB1InternalKey(env);
 const d0 = Date.now();
 const db1Resp = await env.DB1.fetch('https://gr8r-db1-worker/db1/videos', {
   method: 'POST',
@@ -363,13 +363,140 @@ if (!db1Resp.ok) {
 }
 
 const db1_action = (() => { try { const j = JSON.parse(db1Text); return typeof j?.action === 'string' ? j.action : undefined; } catch { return undefined; } })();
-await log(env, {
-  service: "db1-upsert",
-  level: "info",
-  message: "db1 upsert ok",
-  meta: { request_id, job_id: id, ok: true, status_code: db1Resp.status, duration_ms: dDur, next_status: nextStatus, title, ...(db1_action ? { db1_action } : {}) }
-});
 
+vSuccessMeta = {
+  status_code: db1Resp.status,
+  duration_ms: dDur,
+  next_status: nextStatus,
+  ...(db1_action ? { db1_action } : {}),
+  ...(video_id ? { video_id } : {})
+};
+
+// Step 2.6: When the video becomes Post Ready, queue all associated Publishing rows
+if (nextStatus === 'Post Ready') {
+  if (!video_id) {
+    // We expect video_id from Step 0; if missing, log and continue
+    await log(env, {
+      service: "publishing-list",
+      level: "error",
+      message: "missing video_id; cannot queue publishing",
+      meta: { request_id, job_id: id, title, reason: "no_video_id_post_ready" }
+    });
+  } else {
+    // 1) Fetch all Publishing rows for this video
+    const pListStart = Date.now();
+    const pubListResp = await env.DB1.fetch(
+      `https://gr8r-db1-worker/db1/publishing?video_id=${encodeURIComponent(video_id)}`,
+      { method: 'GET', headers: { 'Authorization': `Bearer ${db1Key}` } }
+    );
+    const pListDur = Date.now() - pListStart;
+
+    if (!pubListResp.ok) {
+    await log(env, {
+      service: "publishing-upsert",
+      level: "error",
+      message: "missing video_id; cannot queue publishing",
+      meta: { request_id, job_id: id, title, reason: "no_video_id_post_ready" }
+    });
+
+      // continue; do not throw
+    } else {
+      const publishingPayload = await pubListResp.json();
+      const rows = Array.isArray(publishingPayload?.data)
+        ? publishingPayload.data
+        : (Array.isArray(publishingPayload) ? publishingPayload : []);
+
+      if (!rows.length) {
+        // Quiet success summary (no log noise); consolidated success below will still fire
+        pSummary = {
+          count_total: 0,
+          count_ok: 0,
+          count_failed: 0,
+          duration_ms_list: pListDur,
+          duration_ms_upserts: 0
+        };
+      } else {
+        // 2) Upsert status:"queued" for each (video_id, channel_key)
+        const upStart = Date.now();
+        const reqs = rows.map(r =>
+          env.DB1.fetch('https://gr8r-db1-worker/db1/publishing', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${db1Key}`
+            },
+            body: JSON.stringify({
+              video_id,
+              channel_key: r.channel_key,
+              status: "queued"
+            })
+          })
+        );
+
+        const settled = await Promise.allSettled(reqs);
+        let okCount = 0;
+        const failures = [];
+
+        for (let i = 0; i < settled.length; i++) {
+          const res = settled[i];
+          const ch = rows[i]?.channel_key;
+          if (res.status === 'fulfilled' && res.value?.ok) {
+            okCount++;
+          } else {
+            let status_code = 'fetch_error';
+            let body_snippet = '';
+            if (res.status === 'fulfilled') {
+              status_code = res.value.status;
+              try { body_snippet = (await res.value.text()).slice(0, 200); } catch {}
+            }
+            failures.push({ channel_key: ch, status_code, body_snippet });
+          }
+        }
+
+        const upDur = Date.now() - upStart;
+        pSummary = {
+          count_total: rows.length,
+          count_ok: okCount,
+          count_failed: rows.length - okCount,
+          duration_ms_list: pListDur,
+          duration_ms_upserts: upDur
+        };
+        hadPublishingFailure = pSummary.count_failed > 0;
+
+        if (hadPublishingFailure) {
+          await log(env, {
+            service: "publishing-upsert",
+            level: "error",
+            message: "publishing upserts had failures",
+            meta: {
+              request_id, job_id: id, video_id, title,
+              duration_ms: upDur, count_total: rows.length,
+              count_ok: okCount, count_failed: pSummary.count_failed,
+              failures
+            }
+          });
+        }
+      }
+    }
+  }
+}
+
+// Consolidated success (videos + publishing) — only if both succeeded
+if (nextStatus === 'Post Ready' && vSuccessMeta && pSummary && !hadPublishingFailure) {
+  await log(env, {
+    service: "db1-success",
+    level: "info",
+    message: "videos & publishing updates ok",
+    meta: {
+      request_id,
+      job_id: id,
+      title,
+      video_id,
+      videos: vSuccessMeta, // { status_code, duration_ms, next_status, db1_action?, video_id? }
+      publishing: pSummary  // { count_total, count_ok, count_failed:0, duration_ms_list, duration_ms_upserts }
+    }
+  });
+}
        
         // Step 3: Update Airtable
         const at0 = Date.now();

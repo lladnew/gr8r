@@ -175,6 +175,12 @@ const TABLES = {
     // status enum per your schema comment
     enumValidators: {
       status: new Set(["pending","queued","scheduled","posted","failed","skipped"]),
+      // pending =a waiting transcription and social copy, 
+      // queued = transcription and SC complete - ready for worker scheduling - workers search this status
+      // scheduled = processed and scheduled by applicable worker/platform
+      // posted = post has actually gone live
+      // failed = error state of some kind
+      // skipped = used if a schedule created, transcription and SC complete, but post should no longer be scheduled or posted
       // channel_key validation will be dynamic against Channels table (see handler patch below)
     },
 
