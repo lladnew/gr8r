@@ -1,3 +1,7 @@
+// v1.4.2 gr8r-revai-callback-worker EDIT: ChatGPT proactively changed my status update to a variable (nextStatus) for error handling and used with Airtable which broke... correcting Airtable update to Pending Schedule
+// v1.4.1 gr8r-revai-callback-worker CHANGE: changed DB1 UPSERT from 'Pending Schedule' to 'Post Ready' after successful Social Copy
+// v1.4.0 gr8r-revai-callback-worker FIXED: proper acknowledgement of rev.ai callback even if another error like no transcript
+// v1.3.0 gr8r-revai-callback-worker On ANY Social Copy failure status set to 'Hold' instead of 'Pending Schedule'
 // v1.2.9 gr8r-revai-callback-worker adding DB1 UPSERT capabilities
 // v1.2.8 gr8r-revai-callback-worker
 // removing r2_Transcript_Url from line 164 and adding const at line 274
@@ -22,6 +26,7 @@
 // Removed "env.ASSETS.fetch('r2/put') and replaced with direct evn.VIDEO_BUCKET.put(...)
 
 console.log('[revai-callback] Worker loaded'); // Logs when the Worker is initialized (cold start)
+
 // cache for DB1 internal key
 let CACHED_DB1_INTERNAL_KEY = null;
 
@@ -74,6 +79,8 @@ let fetchResp, fetchText, socialCopy;
         return new Response('Callback ignored: status not transcribed', { status: 200 });
       }
 
+let socialCopyFailed = false;
+
       try {
         // Step 0: Check Airtable for existing record
         
@@ -99,14 +106,28 @@ let fetchResp, fetchText, socialCopy;
 
 const checkData = await checkResp.json();
 const found = Array.isArray(checkData.records) && checkData.records.length > 0;
-const alreadyDone = found && checkData.records[0].fields?.Status === 'Transcription Complete';
+
+let alreadyDone = false;
+if (found) {
+  const f = checkData.records[0].fields || {};
+  const processedStatuses = new Set([
+    'Pending Schedule',
+    'Hold',
+    'Scheduled',
+    'Published',
+    'Transcription Complete'
+  ]);
+
+  // Consider processed if we’ve already written the transcript URL OR advanced status
+  alreadyDone = Boolean(f['R2 Transcript URL']) || processedStatuses.has(f.Status);
+}
 
 if (alreadyDone) {
   await logToGrafana(env, 'info', 'Transcript already processed, skipping', {
     job_id: id,
     title
   });
-  return new Response(JSON.stringify({ success: false, reason: 'Already complete' }), { status: 200 });
+  return new Response(JSON.stringify({ success: false, reason: 'Already processed' }), { status: 200 });
 }
 
 // Step 1: Fetch transcript text (plain text)
@@ -139,6 +160,14 @@ if (!fetchResp.ok) {
   });
   return new Response('Transcript fetch failed', { status: 200 });
 }
+// ADDED: mark failure if transcript is empty/blank
+if (!fetchText || !fetchText.trim()) {
+  await logToGrafana(env, 'error', 'Transcript empty; cannot generate Social Copy', {
+    job_id: id,
+    title
+  });
+  socialCopyFailed = true;
+}
 // Step 1.5: Generate Social Copy from transcript
 try {
   const socialCopyResponse = await env.SOCIALCOPY_WORKER.fetch('https://internal/api/socialcopy', {
@@ -154,14 +183,31 @@ try {
       response: errText,
       source: 'revai-callback-worker'
     });
+    socialCopyFailed = true; // ADDED
   } else {
     socialCopy = await socialCopyResponse.json();
-    console.log('[revai-callback] ✅ Social Copy generated:', JSON.stringify(socialCopy, null, 2));
-    await logToGrafana(env, 'info', 'Received Social Copy from worker', {
-      ...socialCopy,
-      source: 'revai-callback-worker',
-      title
-    });
+
+    // ADDED: validate payload has at least one meaningful field
+    const hasAny =
+      (socialCopy?.hook && String(socialCopy.hook).trim()) ||
+      (socialCopy?.body && String(socialCopy.body).trim()) ||
+      (socialCopy?.cta && String(socialCopy.cta).trim()) ||
+      (socialCopy?.hashtags && String(socialCopy.hashtags).trim());
+
+    if (!hasAny) {
+      await logToGrafana(env, 'error', 'SocialCopy worker returned empty content', {
+        source: 'revai-callback-worker',
+        title
+      });
+      socialCopyFailed = true; // ADDED
+    } else {
+      console.log('[revai-callback] ✅ Social Copy generated:', JSON.stringify(socialCopy, null, 2));
+      await logToGrafana(env, 'info', 'Received Social Copy from worker', {
+        ...socialCopy,
+        source: 'revai-callback-worker',
+        title
+      });
+    }
   }
 } catch (err) {
   console.error('[revai-callback] 💥 Exception while calling SocialCopy worker:', err);
@@ -171,7 +217,9 @@ try {
     source: 'revai-callback-worker',
     title
   });
+  socialCopyFailed = true; // ADDED
 }
+
        // Step 2: Upload transcript + Social Copy to R2
 const sanitizedTitle = title.replace(/[^a-zA-Z0-9 _-]/g, "").replace(/\s+/g, "_");
 const r2Key = `transcripts/${sanitizedTitle}.txt`;
@@ -179,14 +227,15 @@ const r2TranscriptUrl = 'https://videos.gr8r.com/' + r2Key;
 
 let fullTextToUpload = fetchText;
 
-// Append social copy if available
-if (socialCopy?.hook || socialCopy?.body || socialCopy?.cta || socialCopy?.hashtags) {
+// CHANGED: append social copy only if generated successfully
+if (!socialCopyFailed && (socialCopy?.hook || socialCopy?.body || socialCopy?.cta || socialCopy?.hashtags)) {
   fullTextToUpload += `\n\n${socialCopy.hook || ''}\n${socialCopy.body || ''}\n${socialCopy.cta || ''}\n\n${socialCopy.hashtags || ''}`.trimEnd();
 }
 
 await logToGrafana(env, 'debug', 'Uploading transcript + social copy to R2', {
   r2_key: r2Key,
-  has_social_copy: !!socialCopy
+  has_social_copy: !!socialCopy && !socialCopyFailed, // CHANGED
+  social_copy_failed: socialCopyFailed // ADDED
 });
 
 try {
@@ -196,72 +245,70 @@ try {
 } catch (err) {
   throw new Error(`R2 upload failed: ${err.message}`);
 }
-// // Step 2.5: Upsert to DB1 (mirror Airtable fields)
-// await logToGrafana(env, 'debug', 'Upserting DB1 record (revai-callback)', {
-//   title,
-//   job_id: id,
-//   r2_transcript_url: r2TranscriptUrl
-// });
+// Step 2.5: Upsert to DB1
+const nextStatus = socialCopyFailed ? 'Hold' : 'Post Ready'; // ADDED
+await logToGrafana(env, 'debug', 'Upserting DB1 record (revai-callback)', {
+  title,
+  job_id: id,
+  r2_transcript_url: r2TranscriptUrl,
+  next_status: nextStatus,           // ADDED
+  social_copy_failed: socialCopyFailed // ADDED
+});
 
-// const db1Body = sanitizeForDB1({
-//   title,
-//   transcript_id: id,
-//   r2_transcript_url: r2TranscriptUrl,
-//   status: 'Pending Schedule',
-//   ...(socialCopy?.hook && { social_copy_hook: socialCopy.hook }),
-//   ...(socialCopy?.body && { social_copy_body: socialCopy.body }),
-//   ...(socialCopy?.cta && {  social_copy_cta:  socialCopy.cta }),
-//   ...(socialCopy?.hashtags && {
-//     hashtags: Array.isArray(socialCopy.hashtags)
-//       ? socialCopy.hashtags.join(' ')
-//       : socialCopy.hashtags
-//   })
-// });
+const db1Body = sanitizeForDB1({
+  title,
+  transcript_id: id,
+  r2_transcript_url: r2TranscriptUrl,
+  status: nextStatus, // CHANGED
+  ...( !socialCopyFailed && socialCopy?.hook && { social_copy_hook: socialCopy.hook } ),
+  ...( !socialCopyFailed && socialCopy?.body && { social_copy_body: socialCopy.body } ),
+  ...( !socialCopyFailed && socialCopy?.cta && {  social_copy_cta:  socialCopy.cta } ),
+  ...( !socialCopyFailed && socialCopy?.hashtags && {
+    hashtags: Array.isArray(socialCopy.hashtags)
+      ? socialCopy.hashtags.join(' ')
+      : socialCopy.hashtags
+  })
+});
 
-// const db1Key = await getDB1InternalKey(env);
+const db1Key = await getDB1InternalKey(env);
 
-// // TEMP DEBUG: log the full key we are sending
-// await logToGrafana(env, 'debug', 'DB1 key (sender) FULL', {
-//   key: db1Key,
-//   header: `Bearer ${db1Key}`
-// });
+const db1Resp = await env.DB1.fetch('https://gr8r-db1-worker/db1/videos', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${db1Key}`
+  },
+  body: JSON.stringify(db1Body)
+});
 
-// const db1Resp = await env.DB1.fetch('https://gr8r-db1-worker/db1/videos', {
-//   method: 'POST',
-//   headers: {
-//     'Content-Type': 'application/json',
-//     'Authorization': `Bearer ${db1Key}`
-//   },
-//   body: JSON.stringify(db1Body)
-// });
+const db1Text = await db1Resp.text();
+let db1Data;
+try {
+  db1Data = JSON.parse(db1Text);
+} catch {
+  db1Data = { raw: db1Text };
+}
 
-// const db1Text = await db1Resp.text();
-// let db1Data;
-// try {
-//   db1Data = JSON.parse(db1Text);
-// } catch {
-//   db1Data = { raw: db1Text };
-// }
+if (!db1Resp.ok) {
+  await logToGrafana(env, 'error', 'DB1 video upsert failed (revai-callback)', {
+    title,
+    job_id: id,
+    db1Status: db1Resp.status,
+    db1ResponseText: db1Text
+  });
+  throw new Error(`DB1 update failed: ${db1Text}`);
+}
 
-// if (!db1Resp.ok) {
-//   await logToGrafana(env, 'error', 'DB1 video upsert failed (revai-callback)', {
-//     title,
-//     job_id: id,
-//     db1Status: db1Resp.status,
-//     db1ResponseText: db1Text
-//   });
-//   throw new Error(`DB1 update failed: ${db1Text}`);
-// }
-
-// await logToGrafana(env, 'info', 'DB1 update successful (revai-callback)', {
-//   title,
-//   job_id: id,
-//   db1Response: db1Data
-// });
+await logToGrafana(env, 'info', 'DB1 update successful (revai-callback)', {
+  title,
+  job_id: id,
+  db1Response: db1Data
+});
        
         // Step 3: Update Airtable
         await logToGrafana(env, 'debug', 'Updating Airtable record', { title, job_id: id });
 
+        const airtableStatus = socialCopyFailed ? 'Hold' : 'Pending Schedule';
         const airtableResp = await env.AIRTABLE.fetch('https://internal/api/airtable/update', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -270,13 +317,13 @@ try {
             matchField: 'Transcript ID',
             matchValue: id,
             fields: {
-  'R2 Transcript URL': r2TranscriptUrl,
-  Status: 'Pending Schedule',
-  ...(socialCopy?.hook && { 'Social Copy Hook': socialCopy.hook }),
-  ...(socialCopy?.body && { 'Social Copy Body': socialCopy.body }),
-  ...(socialCopy?.cta && { 'Social Copy Call to Action': socialCopy.cta }),
-  ...(socialCopy?.hashtags && { Hashtags: socialCopy.hashtags })
-}
+              'R2 Transcript URL': r2TranscriptUrl,
+              Status: airtableStatus, // CHANGED: decouple Airtable from DB1
+              ...( !socialCopyFailed && socialCopy?.hook && { 'Social Copy Hook': socialCopy.hook } ),
+              ...( !socialCopyFailed && socialCopy?.body && { 'Social Copy Body': socialCopy.body } ),
+              ...( !socialCopyFailed && socialCopy?.cta && { 'Social Copy Call to Action': socialCopy.cta } ),
+              ...( !socialCopyFailed && socialCopy?.hashtags && { Hashtags: socialCopy.hashtags })
+            }
           })
         });
 
@@ -293,12 +340,12 @@ if (!airtableResp.ok) {
   throw new Error(`Airtable update failed: ${airtableResp.status} - ${errorText}`);
 }
 
-        await logToGrafana(env, 'info', 'Airtable update successful', { title, r2_transcript_url: r2TranscriptUrl });
-
-        return new Response(JSON.stringify({ success: true }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        });
+await logToGrafana(env, 'info', 'Callback completed', {
+  title,
+  job_id: id,
+  next_status: airtableStatus,
+  social_copy_failed: socialCopyFailed
+});
 
       } catch (err) {
         await logToGrafana(env, 'error', 'Callback processing error', {
@@ -360,11 +407,24 @@ function sanitizeForDB1(obj) {
 
 async function getDB1InternalKey(env) {
   if (CACHED_DB1_INTERNAL_KEY) return CACHED_DB1_INTERNAL_KEY;
-  const key = env.DB1_INTERNAL_KEY;
-  if (!key) {
-    await logToGrafana(env, 'error', 'Missing DB1_INTERNAL_KEY in env', { source: 'revai-callback-worker' });
-    throw new Error('DB1 internal key not configured');
+
+  const bound = env.DB1_INTERNAL_KEY;
+  let val;
+
+  if (typeof bound === 'string') {
+    // plain secret binding
+    val = bound;
+  } else if (bound && typeof bound.get === 'function') {
+    // Secrets Store binding
+    val = await bound.get();
+  } else {
+    throw new Error('DB1_INTERNAL_KEY binding missing or invalid');
   }
-  CACHED_DB1_INTERNAL_KEY = key;
-  return key;
+
+  val = (val || '').trim();
+  if (!val) throw new Error('DB1_INTERNAL_KEY empty after resolution');
+
+  CACHED_DB1_INTERNAL_KEY = val;
+  return val;
 }
+
