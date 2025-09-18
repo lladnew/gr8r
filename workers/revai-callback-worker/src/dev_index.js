@@ -37,6 +37,16 @@ import { getSecret } from "../../../lib/secrets.js";
 // new Grafana logging shared script
 import { createLogger } from "../../../lib/grafana.js";
 const log = createLogger({ source: "gr8r-revai-callback-worker" });
+// Wrap grafana logger so logging never crashes the request
+const safeLog = async (env, entry) => {
+  try {
+    await log(env, entry);
+  } catch (e) {
+    // Fallback to console so we can still see what's happening in tail/logs
+    console.log('LOG_FAIL', entry?.service || 'unknown', e && (e.stack || e.message || e));
+  }
+};
+
 
 export default {
   async fetch(request, env, ctx) {
@@ -47,6 +57,7 @@ export default {
 
     const url = new URL(request.url);
     if (url.pathname === '/api/revai/callback' && request.method === 'POST') {
+      console.log('[revai-callback] route matched');
        // ADDED: request-scoped context
       const request_id = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
       const route = '/api/revai/callback';

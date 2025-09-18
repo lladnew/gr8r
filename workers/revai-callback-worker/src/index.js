@@ -1,3 +1,4 @@
+// revai-callback-worker Troubleshooting errors - added console logs
 // v1.4.3 gr8r-revai-callback-worker
 // CHANGE: migrate to lib/grafana.js + lib/secrets.js logging; add request_id & timings; remove raw body/content logging
 // CHANGE: standardize labels (service) & meta (snake_case); keep webhook 200 ACK semantics
@@ -49,6 +50,8 @@ export default {
 
 let rawBody, body;
 
+console.log('[revai-callback] route matched');
+
 // Try to get raw text safely
 try {
   rawBody = await request.clone().text();
@@ -63,6 +66,8 @@ try {
   return new Response('Body read failed', { status: 400 });
 }
 
+console.log('[revai-callback] RAW body len=', rawBody?.length ?? 0, 'body=', rawBody);
+
 // Try to parse JSON
 try {
   body = JSON.parse(rawBody);
@@ -76,6 +81,7 @@ try {
 
   return new Response('Bad JSON', { status: 400 });
 }
+console.log('[revai-callback] JSON parsed ok');
 
       const job = body.job;
       if (!job || !job.id || !job.status) {
@@ -91,6 +97,8 @@ try {
 
       const { id, status, metadata } = job;
       const title = metadata || 'Untitled';
+
+      console.log('[revai-callback] job', { id, status, title });
 
       await log(env, {
         service: "callback",
@@ -113,7 +121,7 @@ let fetchResp, fetchText, socialCopy;
       }
 
 let socialCopyFailed = false;
-
+console.log('[revai-callback] Step0 Airtable check start', { transcript_id: id });
       try {
         // Step 0: Check Airtable for existing record
         const a0 = Date.now();      
@@ -164,12 +172,13 @@ if (alreadyDone) {
     message: "already processed, skipping",
     meta: { request_id, job_id: id, title, ok: true, status_code: 200, found: true, already_done: true }
   });
-
+console.log('[revai-callback] Step0 Airtable check result', { found, alreadyDone });
   return new Response(JSON.stringify({ success: false, reason: 'Already processed' }), { status: 200 });
 }
 
 let fDur; // ADDED: will be set after the fetch
 let f0; // ADDED: start time visible to catch
+console.log('[revai-callback] Step1 fetch transcript start');
 
 // Step 1: Fetch transcript text (plain text)
 try {
@@ -221,6 +230,7 @@ if (!fetchText || !fetchText.trim()) {
     meta: { request_id, job_id: id, ok: true, status_code: 200, duration_ms: fDur, transcript_len: fetchText.length }
   });
 }
+console.log('[revai-callback] Step1 fetch transcript ok', { len: fetchText?.length ?? 0 });
 
 // Step 1.5: Generate Social Copy from transcript
 if (fetchText && fetchText.trim()) {
@@ -279,6 +289,7 @@ if (fetchText && fetchText.trim()) {
     socialCopyFailed = true;
   }
 } // end: only run SocialCopy when transcript present
+console.log('[revai-callback] Step1.5 socialcopy ok', { has_hook, has_body, has_cta, has_hashtags });
 
        // Step 2: Upload transcript + Social Copy to R2
 const sanitizedTitle = title.replace(/[^a-zA-Z0-9 _-]/g, "").replace(/\s+/g, "_");
