@@ -1,3 +1,4 @@
+// v1.4.5 gr8r-revai-callback-worker ADDED: function db1ErrorWriteback() to set videos_status to 'Error' if this worker fails for any reason, removed late video_id check
 // v1.4.4 gr8r-revai-callback-worker ADDED: update to publishing table to mark rows 'queued' and ready for publishing, changed logging to safeLog to keep worker from crashing on log issues
 // REMOVED: text parsing of callback in favor of json only
 // REPLACED: grafana success logs with console only versions
@@ -58,6 +59,8 @@ export default {
     let pSummary = null;          // capture publishing summary for consolidated success
     let title; // set from DB1 record (ignore rev.ai metadata)
     let hadPublishingFailure = false;
+    let db1Key; // used across normal flow and global catch
+
 
     const url = new URL(request.url);
     if (url.pathname === '/api/revai/callback' && request.method === 'POST') {
@@ -77,6 +80,7 @@ export default {
           message: "failed to parse json",
           meta: { request_id, route, method, ok: false, status_code: 400, reason: "bad_json" }
         });
+        
         return new Response('Bad JSON', { status: 400 });
       }
 
@@ -88,7 +92,7 @@ export default {
           message: "missing required job fields",
           meta: { request_id, route, method, ok: false, status_code: 400, reason: "missing_job_fields" }
         });
-
+        
         return new Response('Missing required job fields', { status: 400 });
       }
 
@@ -119,7 +123,7 @@ export default {
 
       try {
         // Step 0: Check DB1 for existing video by transcript_id; capture video_id and dedupe
-        const db1Key = await getDB1InternalKey(env);
+        db1Key = await getDB1InternalKey(env);
         const v0 = Date.now();
 
         const videosCheckResp = await env.DB1.fetch(
@@ -208,8 +212,7 @@ export default {
             message: "revai fetch exception",
             meta: { request_id, job_id: id, ok: false, duration_ms: fDur, reason: "revai_fetch_exception" }
           });
-
-
+          await db1ErrorWriteback(env, db1Key, video_id, request_id, id);
           return new Response('Failed to fetch transcript', { status: 200 });
         }
 
@@ -220,7 +223,7 @@ export default {
             message: "revai fetch error",
             meta: { request_id, job_id: id, ok: false, status_code: fetchResp.status, duration_ms: fDur, reason: "revai_fetch_bad_status" }
           });
-
+          await db1ErrorWriteback(env, db1Key, video_id, request_id, id);
           return new Response('Transcript fetch failed', { status: 200 });
         }
       if (!fetchText || !fetchText.trim()) {
@@ -230,6 +233,7 @@ export default {
           message: "transcript empty",
           meta: { request_id, job_id: id, ok: false, duration_ms: fDur, reason: "transcript_empty" }
         });
+        await db1ErrorWriteback(env, db1Key, video_id, request_id, id);
         return new Response('Transcript empty', { status: 200 }); // stop early per Step 4
       } else {
         // success grafana log removed
@@ -342,11 +346,12 @@ export default {
             message: "r2 upload failed",
             meta: { request_id, job_id: id, ok: false, duration_ms: rDur, r2_key: r2Key, reason: "r2_upload_failed" }
           });
+          await db1ErrorWriteback(env, db1Key, video_id, request_id, id);
           throw new Error(`R2 upload failed: ${err.message}`);
         }
 
         // Step 2.5: Upsert to DB1
-        const nextStatus = socialCopyFailed ? 'Hold' : 'Post Ready'; // ADDED
+        const nextStatus = socialCopyFailed ? 'Error' : 'Post Ready'; // ADDED
         const db1Body = sanitizeForDB1({
           title,
           transcript_id: id,
@@ -398,15 +403,6 @@ export default {
 
         // Step 2.6: When the video becomes Post Ready, queue all associated Publishing rows
         if (nextStatus === 'Post Ready') {
-          if (!video_id) {
-            // We expect video_id from Step 0; if missing, log and continue
-            await safeLog(env, {
-              service: "publishing-list",
-              level: "error",
-              message: "missing video_id; cannot queue publishing",
-              meta: { request_id, job_id: id, title, reason: "no_video_id_post_ready" }
-            });
-          } else {
             // 1) Fetch all Publishing rows for this video
             const pListStart = Date.now();
             const pubListResp = await env.DB1.fetch(
@@ -422,7 +418,7 @@ export default {
                 message: "error queueing publishing list",
                 meta: { request_id, job_id: id, title, reason: "publishing_list_bad_status"  }
               });
-
+              await db1ErrorWriteback(env, db1Key, video_id, request_id, id);
               // continue; do not throw
             } else {
               const publishingPayload = await pubListResp.json();
@@ -499,9 +495,10 @@ export default {
                       failures
                     }
                   });
+                  await db1ErrorWriteback(env, db1Key, video_id, request_id, id);
                 }
               }
-            }
+            
           }
         }
 
@@ -568,7 +565,7 @@ export default {
         await safeLog(env, {
           service: "callback",
           level: "info",
-          message: "callback complete",
+          message: "Transcription and Social Copy complete",
           meta: {
             request_id, route, method,
             job_id: id, title,
@@ -588,6 +585,9 @@ export default {
         });
       } catch (err) { // ADDED: big catch for the whole business logic
         const total_duration_ms = Date.now() - t0;
+        if (video_id && db1Key) {
+          await db1ErrorWriteback(env, db1Key, video_id, request_id, id);
+        }
         await safeLog(env, {
           service: "callback",
           level: "error",
@@ -622,4 +622,34 @@ async function getDB1InternalKey(env) {
   const key = await getSecret(env, "DB1_INTERNAL_KEY");
   if (!key) throw new Error('DB1_INTERNAL_KEY empty after resolution');
   return key;
+}
+
+async function db1ErrorWriteback(env, db1Key, video_id, request_id, job_id) {
+  if (!db1Key || !video_id) return; // only after Step 0
+  try {
+    const resp = await env.DB1.fetch('https://gr8r-db1-worker/db1/videos', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${db1Key}`
+      },
+      body: JSON.stringify({ id: video_id, status: 'Error' })
+    });
+    if (!resp.ok) {
+      const t = await resp.text().catch(() => '');
+      await safeLog(env, {
+        service: "db1-error-writeback",
+        level: "error",
+        message: "failed to set DB1 status Error",
+        meta: { request_id, job_id, video_id, status_code: resp.status, body_snippet: t.slice(0, 200) }
+      });
+    }
+  } catch (e) {
+    await safeLog(env, {
+      service: "db1-error-writeback",
+      level: "error",
+      message: "exception during DB1 Error writeback",
+      meta: { request_id, job_id, video_id, reason: "writeback_exception" }
+    });
+  }
 }
