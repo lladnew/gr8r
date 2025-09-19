@@ -1,4 +1,7 @@
-// revai-callback-worker Troubleshooting errors - added console logs
+// v1.4.4 gr8r-revai-callback-worker ADDED: update to publishing table to mark rows 'queued' and ready for publishing, changed logging to safeLog to keep worker from crashing on log issues
+// REMOVED: text parsing of callback in favor of json only
+// REPLACED: grafana success logs with console only versions
+// ADDED: halt for missing video and transcript ID match and error logging for that
 // v1.4.3 gr8r-revai-callback-worker
 // CHANGE: migrate to lib/grafana.js + lib/secrets.js logging; add request_id & timings; remove raw body/content logging
 // CHANGE: standardize labels (service) & meta (snake_case); keep webhook 200 ACK semantics
@@ -31,61 +34,55 @@
 // Removed "env.ASSETS.fetch('r2/put') and replaced with direct evn.VIDEO_BUCKET.put(...)
 
 // Shared libs
-// new getSecret function module
+// getSecret function module
 import { getSecret } from "../../../lib/secrets.js";
 
-// new Grafana logging shared script
+// Grafana logging shared script
 import { createLogger } from "../../../lib/grafana.js";
-const log = createLogger({ source: "gr8r-revai-callback-worker" });
+// Safe logger: always use this; caches underlying logger internally
+let _logger;
+const safeLog = async (env, entry) => {
+  try {
+    _logger = _logger || createLogger({ source: "gr8r-revai-callback-worker" });
+    await _logger(env, entry);
+  } catch (e) {
+    // Never throw from logging
+    console.log('LOG_FAIL', entry?.service || 'unknown', e?.stack || e?.message || e);
+  }
+};
 
 export default {
   async fetch(request, env, ctx) {
+    let video_id;                 // set in Step 0 (DB1 videos check)
+    let vSuccessMeta = null;      // capture videos-upsert success metrics for later
+    let pSummary = null;          // capture publishing summary for consolidated success
+    let title; // set from DB1 record (ignore rev.ai metadata)
+    let hadPublishingFailure = false;
+
     const url = new URL(request.url);
     if (url.pathname === '/api/revai/callback' && request.method === 'POST') {
-       // ADDED: request-scoped context
+      // ADDED: request-scoped context
       const request_id = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
       const route = '/api/revai/callback';
       const method = 'POST';
       const t0 = Date.now();
 
-let rawBody, body;
-
-console.log('[revai-callback] route matched');
-
-// Try to get raw text safely
-try {
-  rawBody = await request.clone().text();
-} catch (e) {
-  await log(env, {
-    service: "callback",
-    level: "error",
-    message: "failed to read request body",
-    meta: { request_id, route, method, ok: false, status_code: 400, reason: "body_read_failed" }
-  });
-
-  return new Response('Body read failed', { status: 400 });
-}
-
-console.log('[revai-callback] RAW body len=', rawBody?.length ?? 0, 'body=', rawBody);
-
-// Try to parse JSON
-try {
-  body = JSON.parse(rawBody);
-} catch (e) {
-  await log(env, {
-    service: "callback",
-    level: "error",
-    message: "failed to parse json",
-    meta: { request_id, route, method, ok: false, status_code: 400, reason: "bad_json" }
-  });
-
-  return new Response('Bad JSON', { status: 400 });
-}
-console.log('[revai-callback] JSON parsed ok');
+      let body;
+      try {
+        body = await request.json();
+      } catch (e) {
+        await safeLog(env, {
+          service: "callback",
+          level: "error",
+          message: "failed to parse json",
+          meta: { request_id, route, method, ok: false, status_code: 400, reason: "bad_json" }
+        });
+        return new Response('Bad JSON', { status: 400 });
+      }
 
       const job = body.job;
       if (!job || !job.id || !job.status) {
-        await log(env, {
+        await safeLog(env, {
           service: "callback",
           level: "error",
           message: "missing required job fields",
@@ -95,22 +92,20 @@ console.log('[revai-callback] JSON parsed ok');
         return new Response('Missing required job fields', { status: 400 });
       }
 
-      const { id, status, metadata } = job;
-      const title = metadata || 'Untitled';
+      const { id, status } = job;
+      // Title will be sourced from DB1 after Step 0
 
-      console.log('[revai-callback] job', { id, status, title });
-
-      await log(env, {
+      await safeLog(env, {
         service: "callback",
         level: "debug",
         message: "rev.ai job completion received",
-        meta: { request_id, route, method, ok: true, job_id: id, status, title }
+        meta: { request_id, route, method, ok: true, job_id: id, status }
       });
 
-let fetchResp, fetchText, socialCopy; 
+      let fetchResp, fetchText, socialCopy;
       if (status !== 'transcribed') {
         if (status === 'failed') {
-          await log(env, {
+          await safeLog(env, {
             service: "callback",
             level: "error",
             message: "rev.ai job failed before transcription",
@@ -120,283 +115,412 @@ let fetchResp, fetchText, socialCopy;
         return new Response('Callback ignored: status not transcribed', { status: 200 });
       }
 
-let socialCopyFailed = false;
-console.log('[revai-callback] Step0 Airtable check start', { transcript_id: id });
-      try {
-        // Step 0: Check Airtable for existing record
-        const a0 = Date.now();      
-        const checkResp = await env.AIRTABLE.fetch('https://internal/api/airtable/get', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            table: 'tblQKTuBRVrpJLmJp',
-            matchField: 'Transcript ID',
-            matchValue: id
-          })
-        });
-        const aDur = Date.now() - a0;
-    
-        if (!checkResp.ok) {
-        await log(env, {
-            service: "airtable-update",
-            level: "error",
-            message: "airtable check failed",
-            meta: { request_id, job_id: id, ok: false, status_code: checkResp.status, duration_ms: aDur, reason: "airtable_check_failed" }
-        });
+      let socialCopyFailed = false;
 
-        return new Response('Airtable check failed', { status: 200 });
+      try {
+        // Step 0: Check DB1 for existing video by transcript_id; capture video_id and dedupe
+        const db1Key = await getDB1InternalKey(env);
+        const v0 = Date.now();
+
+        const videosCheckResp = await env.DB1.fetch(
+          `https://gr8r-db1-worker/db1/videos?transcript_id=${encodeURIComponent(id)}`,
+          { method: 'GET', headers: { 'Authorization': `Bearer ${db1Key}` } }
+        );
+        const vDur = Date.now() - v0;
+
+        if (!videosCheckResp.ok) {
+          await safeLog(env, {
+            service: "db1-videos-check",
+            level: "error",
+            message: "db1 videos check failed",
+            meta: { request_id, job_id: id, ok: false, status_code: videosCheckResp.status, duration_ms: vDur, reason: "db1_videos_check_failed" }
+          });
+          // Acknowledge webhook so rev.ai doesn't spam retries
+          return new Response('DB1 videos check failed', { status: 200 });
         }
 
-const checkData = await checkResp.json();
-const found = Array.isArray(checkData.records) && checkData.records.length > 0;
+        const videosPayload = await videosCheckResp.json();
+        // tolerate either {data: [...] } or plain array
+        const videosArr = Array.isArray(videosPayload?.data) ? videosPayload.data
+          : Array.isArray(videosPayload) ? videosPayload
+            : [];
+        const found = videosArr.length > 0;
 
-let alreadyDone = false;
-if (found) {
-  const f = checkData.records[0].fields || {};
-  const processedStatuses = new Set([
-    'Pending Schedule',
-    'Hold',
-    'Scheduled',
-    'Published',
-    'Transcription Complete'
-  ]);
+        if (!found) {
+          await safeLog(env, {
+            service: "db1-videos-check",
+            level: "error",
+            message: "no video found with this transcript_id",
+            meta: { request_id, job_id: id, ok: false, reason: "no_video_for_transcript_id" }
+          });
+          return new Response('no video found with this transcript_id', { status: 200 });
+        }
 
-  // Consider processed if we’ve already written the transcript URL OR advanced status
-  alreadyDone = Boolean(f['R2 Transcript URL']) || processedStatuses.has(f.Status);
-}
+        const rec = videosArr[0] || {};
+        video_id = Number(rec.id);
 
-if (alreadyDone) {
-  await log(env, {
-    service: "airtable-update",
-    level: "info",
-    message: "already processed, skipping",
-    meta: { request_id, job_id: id, title, ok: true, status_code: 200, found: true, already_done: true }
-  });
-console.log('[revai-callback] Step0 Airtable check result', { found, alreadyDone });
-  return new Response(JSON.stringify({ success: false, reason: 'Already processed' }), { status: 200 });
-}
+        // Source of truth for Title comes from DB1
+        title = (typeof rec.title === 'string' ? rec.title.trim() : '') || '';
 
-let fDur; // ADDED: will be set after the fetch
-let f0; // ADDED: start time visible to catch
-console.log('[revai-callback] Step1 fetch transcript start');
+        if (!title) {
+          await safeLog(env, {
+            service: "db1-videos-check",
+            level: "error",
+            message: "missing title for transcript_id",
+            meta: { request_id, job_id: id, ok: false, ...(video_id ? { video_id } : {}), reason: "missing_db1_title" }
+          });
+          return new Response('missing DB1 title', { status: 200 });
+        }
 
-// Step 1: Fetch transcript text (plain text)
-try {
-    f0 = Date.now();
+        // Dedupe: only if status is Post Ready
+        const alreadyDone = rec.status === 'Post Ready';
 
-    fetchResp = await env.REVAIFETCH.fetch('https://internal/api/revai/fetch-transcript', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_id: id })
-    });
-    fetchText = await fetchResp.text();
-    fDur = Date.now() - f0; // CHANGED: assign to outer let
-    } catch (err) {
-    fDur = Date.now() - f0; // CHANGED: assign to outer let
-    await log(env, {
-        service: "revai-fetch",
-        level: "error",
-        message: "revai fetch exception",
-        meta: { request_id, job_id: id, ok: false, duration_ms: fDur, reason: "revai_fetch_exception" }
-    });
+        if (alreadyDone) {
+          await safeLog(env, {
+            service: "db1-videos-check",
+            level: "info",
+            message: "already processed, skipping",
+            meta: { request_id, job_id: id, ok: true, found: true, already_done: true, video_id, status: rec.status }
+          });
+          return new Response(JSON.stringify({ success: false, reason: 'Already processed' }), { status: 200 });
+        }
 
 
-  return new Response('Failed to fetch transcript', { status: 200 });
-}
+        let fDur; // ADDED: will be set after the fetch
+        let f0; // ADDED: start time visible to catch
 
-if (!fetchResp.ok) {
-  await log(env, {
-    service: "revai-fetch",
-    level: "error",
-    message: "revai fetch error",
-    meta: { request_id, job_id: id, ok: false, status_code: fetchResp.status, duration_ms: fDur, reason: "revai_fetch_bad_status" }
-  });
+        // Step 1: Fetch transcript text (plain text)
+        try {
+          f0 = Date.now();
 
-  return new Response('Transcript fetch failed', { status: 200 });
-}
-if (!fetchText || !fetchText.trim()) {
-  await log(env, {
-    service: "revai-fetch",
-    level: "error",
-    message: "transcript empty",
-    meta: { request_id, job_id: id, ok: false, duration_ms: fDur, reason: "transcript_empty" }
-  });
-  socialCopyFailed = true;
-} else {
-  await log(env, {
-    service: "revai-fetch",
-    level: "info",
-    message: "transcript fetched",
-    meta: { request_id, job_id: id, ok: true, status_code: 200, duration_ms: fDur, transcript_len: fetchText.length }
-  });
-}
-console.log('[revai-callback] Step1 fetch transcript ok', { len: fetchText?.length ?? 0 });
+          fetchResp = await env.REVAIFETCH.fetch('https://internal/api/revai/fetch-transcript', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_id: id })
+          });
+          fetchText = await fetchResp.text();
+          fDur = Date.now() - f0; // CHANGED: assign to outer let
+        } catch (err) {
+          fDur = Date.now() - f0; // CHANGED: assign to outer let
+          await safeLog(env, {
+            service: "revai-fetch",
+            level: "error",
+            message: "revai fetch exception",
+            meta: { request_id, job_id: id, ok: false, duration_ms: fDur, reason: "revai_fetch_exception" }
+          });
 
-// Step 1.5: Generate Social Copy from transcript
-if (fetchText && fetchText.trim()) {
-  let sDur;
-  const s0 = Date.now();
-  try {
-    const socialCopyResponse = await env.SOCIALCOPY_WORKER.fetch('https://internal/api/socialcopy', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ transcript: fetchText, title })
-    });
 
-    if (!socialCopyResponse.ok) {
-      sDur = Date.now() - s0;
-      await log(env, {
-        service: "socialcopy",
-        level: "error",
-        message: "socialcopy error",
-        meta: { request_id, job_id: id, ok: false, status_code: socialCopyResponse.status, duration_ms: sDur, reason: "socialcopy_bad_status" }
-      });
-      socialCopyFailed = true;
-    } else {
-      socialCopy = await socialCopyResponse.json();
-      sDur = Date.now() - s0;
+          return new Response('Failed to fetch transcript', { status: 200 });
+        }
 
-      const has_hook = !!(socialCopy?.hook && String(socialCopy.hook).trim());
-      const has_body = !!(socialCopy?.body && String(socialCopy.body).trim());
-      const has_cta  = !!(socialCopy?.cta  && String(socialCopy.cta).trim());
-      const has_hashtags = !!(socialCopy?.hashtags && String(socialCopy.hashtags).trim());
+        if (!fetchResp.ok) {
+          await safeLog(env, {
+            service: "revai-fetch",
+            level: "error",
+            message: "revai fetch error",
+            meta: { request_id, job_id: id, ok: false, status_code: fetchResp.status, duration_ms: fDur, reason: "revai_fetch_bad_status" }
+          });
 
-      if (!(has_hook || has_body || has_cta || has_hashtags)) {
-        await log(env, {
-          service: "socialcopy",
+          return new Response('Transcript fetch failed', { status: 200 });
+        }
+      if (!fetchText || !fetchText.trim()) {
+        await safeLog(env, {
+          service: "revai-fetch",
           level: "error",
-          message: "socialcopy empty",
-          meta: { request_id, job_id: id, ok: false, duration_ms: sDur, reason: "socialcopy_empty" }
+          message: "transcript empty",
+          meta: { request_id, job_id: id, ok: false, duration_ms: fDur, reason: "transcript_empty" }
         });
-        socialCopyFailed = true;
+        return new Response('Transcript empty', { status: 200 }); // stop early per Step 4
       } else {
-        await log(env, {
-          service: "socialcopy",
-          level: "info",
-          message: "social copy generated",
-          meta: { request_id, job_id: id, ok: true, status_code: 200, duration_ms: sDur, has_hook, has_body, has_cta, has_hashtags }
+        // success grafana log removed
+        console.log('[revai-callback] transcript fetched', {
+          request_id,
+          job_id: id,
+          duration_ms: fDur,
+          transcript_len: (fetchText?.length ?? 0)
         });
       }
-    }
-  } catch (err) {
-    sDur = Date.now() - s0;
-    await log(env, {
-      service: "socialcopy",
-      level: "error",
-      message: "socialcopy exception",
-      meta: { request_id, job_id: id, ok: false, duration_ms: sDur, reason: "socialcopy_exception" }
-    });
-    socialCopyFailed = true;
-  }
-} // end: only run SocialCopy when transcript present
 
-console.log('[revai-callback] Step1.5 socialcopy ok', {
-  socialCopyFailed,
-  has_hook: !!(socialCopy?.hook && String(socialCopy.hook).trim()),
-  has_body: !!(socialCopy?.body && String(socialCopy.body).trim()),
-  has_cta:  !!(socialCopy?.cta  && String(socialCopy.cta).trim()),
-  has_hashtags: !!(socialCopy?.hashtags && String(socialCopy.hashtags).trim())
-});
+        // Step 1.5: Generate Social Copy from transcript
+        if (fetchText && fetchText.trim()) {
+          let sDur;
+          const s0 = Date.now();
+          try {
+            const socialCopyResponse = await env.SOCIALCOPY_WORKER.fetch('https://internal/api/socialcopy', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ transcript: fetchText, title })
+            });
 
+            if (!socialCopyResponse.ok) {
+              sDur = Date.now() - s0;
+              await safeLog(env, {
+                service: "socialcopy",
+                level: "error",
+                message: "socialcopy error",
+                meta: { request_id, job_id: id, ok: false, status_code: socialCopyResponse.status, duration_ms: sDur, reason: "socialcopy_bad_status" }
+              });
+              socialCopyFailed = true;
+            } else {
+              socialCopy = await socialCopyResponse.json();
+              sDur = Date.now() - s0;
 
-       // Step 2: Upload transcript + Social Copy to R2
-const sanitizedTitle = title.replace(/[^a-zA-Z0-9 _-]/g, "").replace(/\s+/g, "_");
-console.log('[revai-callback] Step2 R2 prep', { title });
-const r2Key = `transcripts/${sanitizedTitle}.txt`;
-const r2TranscriptUrl = 'https://videos.gr8r.com/' + r2Key;
+              const has_hook = !!(socialCopy?.hook && String(socialCopy.hook).trim());
+              const has_body = !!(socialCopy?.body && String(socialCopy.body).trim());
+              const has_cta = !!(socialCopy?.cta && String(socialCopy.cta).trim());
+              const has_hashtags = !!(socialCopy?.hashtags && String(socialCopy.hashtags).trim());
 
-let fullTextToUpload = fetchText || '';
+              if (!(has_hook || has_body || has_cta || has_hashtags)) {
+                await safeLog(env, {
+                  service: "socialcopy",
+                  level: "error",
+                  message: "socialcopy empty",
+                  meta: { request_id, job_id: id, ok: false, duration_ms: sDur, reason: "socialcopy_empty" }
+                });
+                socialCopyFailed = true;
+              } else {
+                // success grafana log removed.
+                console.log('[revai-callback] social copy generated', {
+                  request_id,
+                  job_id: id,
+                  duration_ms: sDur,
+                  has_hook,
+                  has_body,
+                  has_cta,
+                  has_hashtags
+                });
 
-// CHANGED: append social copy only if generated successfully
-if (!socialCopyFailed && (socialCopy?.hook || socialCopy?.body || socialCopy?.cta || socialCopy?.hashtags)) {
-  fullTextToUpload += `\n\n${socialCopy.hook || ''}\n${socialCopy.body || ''}\n${socialCopy.cta || ''}\n\n${socialCopy.hashtags || ''}`.trimEnd();
-}
+              }
+            }
+          } catch (err) {
+            sDur = Date.now() - s0;
+            await safeLog(env, {
+              service: "socialcopy",
+              level: "error",
+              message: "socialcopy exception",
+              meta: { request_id, job_id: id, ok: false, duration_ms: sDur, reason: "socialcopy_exception" }
+            });
+            socialCopyFailed = true;
+          }
+        } // end: only run SocialCopy when transcript present
 
-    let rDur; // ADDED
-    let r0;   // ADDED
-    try {
-        r0 = Date.now(); // CHANGED
-        
-console.log('[revai-callback] Step2 R2 pre-put', { r2Key, textLen: (fullTextToUpload?.length ?? 0) });
+        // Step 2: Upload transcript + Social Copy to R2
+        const sanitizedTitle = title.replace(/[^a-zA-Z0-9 _-]/g, "").replace(/\s+/g, "_");
+        const r2Key = `transcripts/${sanitizedTitle}.txt`;
+        const r2TranscriptUrl = 'https://videos.gr8r.com/' + r2Key;
 
-        await env.VIDEO_BUCKET.put(r2Key, fullTextToUpload, {
+        let fullTextToUpload = fetchText || '';
+
+        // CHANGED: append social copy only if generated successfully
+        if (!socialCopyFailed && (socialCopy?.hook || socialCopy?.body || socialCopy?.cta || socialCopy?.hashtags)) {
+          fullTextToUpload += `\n\n${socialCopy.hook || ''}\n${socialCopy.body || ''}\n${socialCopy.cta || ''}\n\n${socialCopy.hashtags || ''}`.trimEnd();
+        }
+
+        let rDur; // ADDED
+        let r0;   // ADDED
+        try {
+          r0 = Date.now(); // CHANGED
+
+          await env.VIDEO_BUCKET.put(r2Key, fullTextToUpload, {
             httpMetadata: { contentType: 'text/plain' }
-        });
-        console.log('[revai-callback] Step2 R2 put ok');
+          });
+          rDur = Date.now() - r0; // CHANGED: compute duration
+          // success grafana log removed
+          console.log('[revai-callback] r2 upload complete', {
+            request_id,
+            job_id: id,
+            duration_ms: rDur,
+            r2_key: r2Key,
+            has_social_copy: !socialCopyFailed
+          });
 
-        rDur = Date.now() - r0; // CHANGED: compute duration
-
-        await log(env, {
+        } catch (err) {
+          rDur = Date.now() - r0; // CHANGED: compute duration
+          await safeLog(env, {
             service: "r2-upload",
-            level: "info",
-            message: "r2 upload complete",
-            meta: { request_id, job_id: id, ok: true, duration_ms: rDur, r2_key: r2Key, has_social_copy: !socialCopyFailed }
+            level: "error",
+            message: "r2 upload failed",
+            meta: { request_id, job_id: id, ok: false, duration_ms: rDur, r2_key: r2Key, reason: "r2_upload_failed" }
+          });
+          throw new Error(`R2 upload failed: ${err.message}`);
+        }
+
+        // Step 2.5: Upsert to DB1
+        const nextStatus = socialCopyFailed ? 'Hold' : 'Post Ready'; // ADDED
+        const db1Body = sanitizeForDB1({
+          title,
+          transcript_id: id,
+          r2_transcript_url: r2TranscriptUrl,
+          status: nextStatus, // CHANGED
+          ...(!socialCopyFailed && socialCopy?.hook && { social_copy_hook: socialCopy.hook }),
+          ...(!socialCopyFailed && socialCopy?.body && { social_copy_body: socialCopy.body }),
+          ...(!socialCopyFailed && socialCopy?.cta && { social_copy_cta: socialCopy.cta }),
+          ...(!socialCopyFailed && socialCopy?.hashtags && {
+            hashtags: Array.isArray(socialCopy.hashtags)
+              ? socialCopy.hashtags.join(' ')
+              : socialCopy.hashtags
+          })
         });
 
-} catch (err) {
-  rDur = Date.now() - r0; // CHANGED: compute duration
-  await log(env, {
-    service: "r2-upload",
-    level: "error",
-    message: "r2 upload failed",
-    meta: { request_id, job_id: id, ok: false, duration_ms: rDur, r2_key: r2Key, reason: "r2_upload_failed" }
-  });
-  throw new Error(`R2 upload failed: ${err.message}`);
-}
+        const d0 = Date.now();
+        const db1Resp = await env.DB1.fetch('https://gr8r-db1-worker/db1/videos', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${db1Key}`
+          },
+          body: JSON.stringify(db1Body)
+        });
 
-// Step 2.5: Upsert to DB1
-const nextStatus = socialCopyFailed ? 'Hold' : 'Post Ready'; // ADDED
-const db1Body = sanitizeForDB1({
-  title,
-  transcript_id: id,
-  r2_transcript_url: r2TranscriptUrl,
-  status: nextStatus, // CHANGED
-  ...( !socialCopyFailed && socialCopy?.hook && { social_copy_hook: socialCopy.hook } ),
-  ...( !socialCopyFailed && socialCopy?.body && { social_copy_body: socialCopy.body } ),
-  ...( !socialCopyFailed && socialCopy?.cta && {  social_copy_cta:  socialCopy.cta } ),
-  ...( !socialCopyFailed && socialCopy?.hashtags && {
-    hashtags: Array.isArray(socialCopy.hashtags)
-      ? socialCopy.hashtags.join(' ')
-      : socialCopy.hashtags
-  })
-});
+        const db1Text = await db1Resp.text();
+        const dDur = Date.now() - d0;
 
-const db1Key = await getDB1InternalKey(env);
-const d0 = Date.now();
-const db1Resp = await env.DB1.fetch('https://gr8r-db1-worker/db1/videos', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${db1Key}`
-  },
-  body: JSON.stringify(db1Body)
-});
+        if (!db1Resp.ok) {
+          await safeLog(env, {
+            service: "db1-upsert",
+            level: "error",
+            message: "db1 upsert failed",
+            meta: { request_id, job_id: id, ok: false, status_code: db1Resp.status, duration_ms: dDur, next_status: nextStatus, title, reason: "db1_upsert_failed" }
+          });
 
-const db1Text = await db1Resp.text();
-const dDur = Date.now() - d0;
+          throw new Error(`DB1 update failed: ${db1Text}`);
+        }
 
-if (!db1Resp.ok) {
-  await log(env, {
-    service: "db1-upsert",
-    level: "error",
-    message: "db1 upsert failed",
-    meta: { request_id, job_id: id, ok: false, status_code: db1Resp.status, duration_ms: dDur, next_status: nextStatus, title, reason: "db1_upsert_failed" }
-  });
+        const db1_action = (() => { try { const j = JSON.parse(db1Text); return typeof j?.action === 'string' ? j.action : undefined; } catch { return undefined; } })();
 
-  throw new Error(`DB1 update failed: ${db1Text}`);
-}
+        vSuccessMeta = {
+          status_code: db1Resp.status,
+          duration_ms: dDur,
+          next_status: nextStatus,
+          ...(db1_action ? { db1_action } : {}),
+          ...(video_id ? { video_id } : {})
+        };
 
-const db1_action = (() => { try { const j = JSON.parse(db1Text); return typeof j?.action === 'string' ? j.action : undefined; } catch { return undefined; } })();
-await log(env, {
-  service: "db1-upsert",
-  level: "info",
-  message: "db1 upsert ok",
-  meta: { request_id, job_id: id, ok: true, status_code: db1Resp.status, duration_ms: dDur, next_status: nextStatus, title, ...(db1_action ? { db1_action } : {}) }
-});
+        // Step 2.6: When the video becomes Post Ready, queue all associated Publishing rows
+        if (nextStatus === 'Post Ready') {
+          if (!video_id) {
+            // We expect video_id from Step 0; if missing, log and continue
+            await safeLog(env, {
+              service: "publishing-list",
+              level: "error",
+              message: "missing video_id; cannot queue publishing",
+              meta: { request_id, job_id: id, title, reason: "no_video_id_post_ready" }
+            });
+          } else {
+            // 1) Fetch all Publishing rows for this video
+            const pListStart = Date.now();
+            const pubListResp = await env.DB1.fetch(
+              `https://gr8r-db1-worker/db1/publishing?video_id=${encodeURIComponent(video_id)}`,
+              { method: 'GET', headers: { 'Authorization': `Bearer ${db1Key}` } }
+            );
+            const pListDur = Date.now() - pListStart;
 
-       
+            if (!pubListResp.ok) {
+              await safeLog(env, {
+                service: "publishing-upsert",
+                level: "error",
+                message: "error queueing publishing list",
+                meta: { request_id, job_id: id, title, reason: "publishing_list_bad_status"  }
+              });
+
+              // continue; do not throw
+            } else {
+              const publishingPayload = await pubListResp.json();
+              const rows = Array.isArray(publishingPayload?.data)
+                ? publishingPayload.data
+                : (Array.isArray(publishingPayload) ? publishingPayload : []);
+
+              if (!rows.length) {
+                // Quiet success summary (no log noise); consolidated success below will still fire
+                pSummary = {
+                  count_total: 0,
+                  count_ok: 0,
+                  count_failed: 0,
+                  duration_ms_list: pListDur,
+                  duration_ms_upserts: 0
+                };
+              } else {
+                // 2) Upsert status:"queued" for each (video_id, channel_key)
+                const upStart = Date.now();
+                const reqs = rows.map(r =>
+                  env.DB1.fetch('https://gr8r-db1-worker/db1/publishing', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${db1Key}`
+                    },
+                    body: JSON.stringify({
+                      video_id,
+                      channel_key: r.channel_key,
+                      status: "queued"
+                    })
+                  })
+                );
+
+                const settled = await Promise.allSettled(reqs);
+                let okCount = 0;
+                const failures = [];
+
+                for (let i = 0; i < settled.length; i++) {
+                  const res = settled[i];
+                  const ch = rows[i]?.channel_key;
+                  if (res.status === 'fulfilled' && res.value?.ok) {
+                    okCount++;
+                  } else {
+                    let status_code = 'fetch_error';
+                    let body_snippet = '';
+                    if (res.status === 'fulfilled') {
+                      status_code = res.value.status;
+                      try { body_snippet = (await res.value.text()).slice(0, 200); } catch { }
+                    }
+                    failures.push({ channel_key: ch, status_code, body_snippet });
+                  }
+                }
+
+                const upDur = Date.now() - upStart;
+                pSummary = {
+                  count_total: rows.length,
+                  count_ok: okCount,
+                  count_failed: rows.length - okCount,
+                  duration_ms_list: pListDur,
+                  duration_ms_upserts: upDur
+                };
+                hadPublishingFailure = pSummary.count_failed > 0;
+
+                if (hadPublishingFailure) {
+                  await safeLog(env, {
+                    service: "publishing-upsert",
+                    level: "error",
+                    message: "publishing upserts had failures",
+                    meta: {
+                      request_id, job_id: id, video_id, title,
+                      duration_ms: upDur, count_total: rows.length,
+                      count_ok: okCount, count_failed: pSummary.count_failed,
+                      failures
+                    }
+                  });
+                }
+              }
+            }
+          }
+        }
+
+        // Consolidated success (videos + publishing) — only if both succeeded
+        if (nextStatus === 'Post Ready' && vSuccessMeta && pSummary && !hadPublishingFailure) {
+          // success grafana log removed
+          console.log('[revai-callback] videos & publishing updates ok', {
+            request_id,
+            job_id: id,
+            title,
+            video_id,
+            videos: vSuccessMeta,   // { status_code, duration_ms, next_status, db1_action?, video_id? }
+            publishing: pSummary    // { count_total, count_ok, count_failed, duration_ms_list, duration_ms_upserts }
+          });
+        }
+
         // Step 3: Update Airtable
         const at0 = Date.now();
+
         const airtableStatus = socialCopyFailed ? 'Hold' : 'Pending Schedule';
         const airtableResp = await env.AIRTABLE.fetch('https://internal/api/airtable/update', {
           method: 'POST',
@@ -408,64 +532,78 @@ await log(env, {
             fields: {
               'R2 Transcript URL': r2TranscriptUrl,
               Status: airtableStatus, // CHANGED: decouple Airtable from DB1
-              ...( !socialCopyFailed && socialCopy?.hook && { 'Social Copy Hook': socialCopy.hook } ),
-              ...( !socialCopyFailed && socialCopy?.body && { 'Social Copy Body': socialCopy.body } ),
-              ...( !socialCopyFailed && socialCopy?.cta && { 'Social Copy Call to Action': socialCopy.cta } ),
-              ...( !socialCopyFailed && socialCopy?.hashtags && { Hashtags: socialCopy.hashtags })
+              ...(!socialCopyFailed && socialCopy?.hook && { 'Social Copy Hook': socialCopy.hook }),
+              ...(!socialCopyFailed && socialCopy?.body && { 'Social Copy Body': socialCopy.body }),
+              ...(!socialCopyFailed && socialCopy?.cta && { 'Social Copy Call to Action': socialCopy.cta }),
+              ...(!socialCopyFailed && socialCopy?.hashtags && { Hashtags: socialCopy.hashtags })
             }
           })
         });
         const atDur = Date.now() - at0;
 
-if (!airtableResp.ok) {
-  const errorText = await airtableResp.text();
-   await log(env, {
-    service: "airtable-update",
-    level: "error",
-    message: "airtable update failed",
-    meta: { request_id, job_id: id, ok: false, status_code: airtableResp.status, duration_ms: atDur, title, next_status: nextStatus, reason: "airtable_update_failed" }
-  });
+        if (!airtableResp.ok) {
+          const errorText = await airtableResp.text();
+          await safeLog(env, {
+            service: "airtable-update",
+            level: "error",
+            message: "airtable update failed",
+            meta: { request_id, job_id: id, ok: false, status_code: airtableResp.status, duration_ms: atDur, title, next_status: nextStatus, reason: "airtable_update_failed" }
+          });
 
-  throw new Error(`Airtable update failed: ${airtableResp.status} - ${errorText}`);
-}
+          throw new Error(`Airtable update failed: ${airtableResp.status} - ${errorText}`);
+        }
 
-await log(env, {
-  service: "airtable-update",
-  level: "info",
-  message: "airtable update ok",
-  meta: { request_id, job_id: id, ok: true, status_code: airtableResp.status, duration_ms: atDur, title, next_status: nextStatus }
-});
+        // success grafana log removed.
+        console.log('[revai-callback] airtable update ok', {
+          request_id,
+          job_id: id,
+          duration_ms: atDur,
+          status_code: airtableResp.status,
+          title,
+          next_status: nextStatus
+        });
 
-const total_duration_ms = Date.now() - t0;
-await log(env, {
-  service: "callback",
-  level: "info",
-  message: "transcript and social copy complete",
-  meta: { request_id, route, method, job_id: id, title, ok: true, status_code: 200, social_copy_failed: socialCopyFailed, next_status: nextStatus, total_duration_ms }
-});
 
-return new Response(JSON.stringify({ success: true }), {
-  status: 200,
-  headers: { 'Content-Type': 'application/json' }
-});
-} catch (err) { // ADDED: big catch for the whole business logic
-  const total_duration_ms = Date.now() - t0;
-  await log(env, {
-    service: "callback",
-    level: "error",
-    message: "callback processing error",
-    meta: { request_id, route, method, ok: false, status_code: 200, reason: "callback_processing_error", total_duration_ms }
-  });
-  return new Response(JSON.stringify({ success: false }), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' }
-  });
-} // <-- closes the big try/catch
+        const total_duration_ms = Date.now() - t0;
+        await safeLog(env, {
+          service: "callback",
+          level: "info",
+          message: "callback complete",
+          meta: {
+            request_id, route, method,
+            job_id: id, title,
+            ok: true, status_code: 200,
+            social_copy_failed: socialCopyFailed,
+            next_status: nextStatus,
+            total_duration_ms,
+            ...(vSuccessMeta ? { videos: vSuccessMeta } : {}),
+            ...(pSummary ? { publishing: pSummary } : {})
+          }
+        });
 
-} // <-- closes: if (url.pathname === ...)
 
-return new Response('Not found', { status: 404 });
-} // <-- closes: async fetch
+        return new Response(JSON.stringify({ success: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      } catch (err) { // ADDED: big catch for the whole business logic
+        const total_duration_ms = Date.now() - t0;
+        await safeLog(env, {
+          service: "callback",
+          level: "error",
+          message: "callback processing error",
+          meta: { request_id, route, method, ok: false, status_code: 200, reason: "callback_processing_error", total_duration_ms }
+        });
+        return new Response(JSON.stringify({ success: false }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      } // <-- closes the big try/catch
+
+    } // <-- closes: if (url.pathname === ...)
+
+    return new Response('Not found', { status: 404 });
+  } // <-- closes: async fetch
 
 }; // <-- closes: export default
 
