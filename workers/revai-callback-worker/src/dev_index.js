@@ -1,3 +1,4 @@
+// v1.4.5 gr8r-revai-callback-worker ADDED: function db1ErrorWriteback() to set videos_status to 'Error' if this worker fails for any reason, removed late video_id check
 // v1.4.4 gr8r-revai-callback-worker ADDED: update to publishing table to mark rows 'queued' and ready for publishing, changed logging to safeLog to keep worker from crashing on log issues
 // REMOVED: text parsing of callback in favor of json only
 // REPLACED: grafana success logs with console only versions
@@ -402,15 +403,6 @@ export default {
 
         // Step 2.6: When the video becomes Post Ready, queue all associated Publishing rows
         if (nextStatus === 'Post Ready') {
-          if (!video_id) {
-            // We expect video_id from Step 0; if missing, log and continue
-            await safeLog(env, {
-              service: "publishing-list",
-              level: "error",
-              message: "missing video_id; cannot queue publishing",
-              meta: { request_id, job_id: id, title, reason: "no_video_id_post_ready" }
-            });
-          } else {
             // 1) Fetch all Publishing rows for this video
             const pListStart = Date.now();
             const pubListResp = await env.DB1.fetch(
@@ -506,7 +498,7 @@ export default {
                   await db1ErrorWriteback(env, db1Key, video_id, request_id, id);
                 }
               }
-            }
+            
           }
         }
 
