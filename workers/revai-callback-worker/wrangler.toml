@@ -12,10 +12,6 @@ binding = "SOCIALCOPY_WORKER"
 service = "gr8r-socialcopy-worker"
 
 [[services]]
-binding = "GRAFANA"
-service = "gr8r-grafana-worker"
-
-[[services]]
 binding = "REVAIFETCH"
 service = "gr8r-revai-worker"
 
