@@ -397,6 +397,7 @@ await log(env, {
        
         // Step 3: Update Airtable
         const at0 = Date.now();
+        const airtableStatus = socialCopyFailed ? 'Hold' : 'Pending Schedule';
         const airtableResp = await env.AIRTABLE.fetch('https://internal/api/airtable/update', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -406,7 +407,7 @@ await log(env, {
             matchValue: id,
             fields: {
               'R2 Transcript URL': r2TranscriptUrl,
-              Status: nextStatus, // CHANGED
+              Status: airtableStatus, // CHANGED: decouple Airtable from DB1
               ...( !socialCopyFailed && socialCopy?.hook && { 'Social Copy Hook': socialCopy.hook } ),
               ...( !socialCopyFailed && socialCopy?.body && { 'Social Copy Body': socialCopy.body } ),
               ...( !socialCopyFailed && socialCopy?.cta && { 'Social Copy Call to Action': socialCopy.cta } ),
