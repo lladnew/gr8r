@@ -293,6 +293,7 @@ console.log('[revai-callback] Step1.5 socialcopy ok', { has_hook, has_body, has_
 
        // Step 2: Upload transcript + Social Copy to R2
 const sanitizedTitle = title.replace(/[^a-zA-Z0-9 _-]/g, "").replace(/\s+/g, "_");
+console.log('[revai-callback] Step2 R2 prep', { title });
 const r2Key = `transcripts/${sanitizedTitle}.txt`;
 const r2TranscriptUrl = 'https://videos.gr8r.com/' + r2Key;
 
@@ -307,10 +308,14 @@ if (!socialCopyFailed && (socialCopy?.hook || socialCopy?.body || socialCopy?.ct
     let r0;   // ADDED
     try {
         r0 = Date.now(); // CHANGED
+        
+console.log('[revai-callback] Step2 R2 pre-put', { r2Key, textLen: (fullTextToUpload?.length ?? 0) });
 
         await env.VIDEO_BUCKET.put(r2Key, fullTextToUpload, {
             httpMetadata: { contentType: 'text/plain' }
         });
+        console.log('[revai-callback] Step2 R2 put ok');
+
         rDur = Date.now() - r0; // CHANGED: compute duration
 
         await log(env, {
