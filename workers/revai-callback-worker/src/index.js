@@ -289,7 +289,15 @@ if (fetchText && fetchText.trim()) {
     socialCopyFailed = true;
   }
 } // end: only run SocialCopy when transcript present
-console.log('[revai-callback] Step1.5 socialcopy ok', { has_hook, has_body, has_cta, has_hashtags });
+
+console.log('[revai-callback] Step1.5 socialcopy ok', {
+  socialCopyFailed,
+  has_hook: !!(socialCopy?.hook && String(socialCopy.hook).trim()),
+  has_body: !!(socialCopy?.body && String(socialCopy.body).trim()),
+  has_cta:  !!(socialCopy?.cta  && String(socialCopy.cta).trim()),
+  has_hashtags: !!(socialCopy?.hashtags && String(socialCopy.hashtags).trim())
+});
+
 
        // Step 2: Upload transcript + Social Copy to R2
 const sanitizedTitle = title.replace(/[^a-zA-Z0-9 _-]/g, "").replace(/\s+/g, "_");
