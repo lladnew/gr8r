@@ -7,6 +7,7 @@
 * Make logs easy to query, filter, and chart.
 * Keep sensitive data out of logs.
 * Keep request latency unaffected by logging failures.
+* verbose error logging to Grafana and limited success logging (more verbose success logging to conole for troubeshooting with wrangler tail)
 
 ---
 
