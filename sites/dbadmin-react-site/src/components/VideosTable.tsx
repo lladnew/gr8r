@@ -1,3 +1,4 @@
+//dbadmin-react-site/VideosTable.tsx v1.2.2 ADDED: Error as a new status option for vidoes_status
 //dbadmin-react-site/VideosTable.tsx v1.2.1 EDIT: moved kabab to left side with checkbox for mass edit and removed the kabab and checkbox columns from being changed in view
 //dbadmin-react-site/VideosTable.tsx v1.2.1 ADDED: mass edit and delete capabilities
 //dbadmin-react-site/VideosTable.tsx v1.2.0 CHANGE: removed 'Pending Schedule' and replaced 'Scheduled' with 'Post Ready' after successful Social Copy
@@ -109,10 +110,11 @@ const DEFAULT_SORT_COL = 'record_modified';
 const DEFAULT_SORT: SortingState = [{ id: DEFAULT_SORT_COL, desc: true }];
 // v1.0.9 ADD: enumerations + display helpers
 const STATUS_OPTIONS = [
+  "Hold",
   "Post Ready",
   "Working",
-  "Hold",
   "Pending Transcription",
+  "Error",
 ] as const;
 
 const VIDEO_TYPE_OPTIONS = [
@@ -126,7 +128,8 @@ type StatusType = typeof STATUS_OPTIONS[number];
 type VideoType = typeof VIDEO_TYPE_OPTIONS[number];
 
 const statusPillClasses: Record<StatusType, string> = {
-    "Post Ready": "bg-green-100 text-green-800 border-green-200",
+  "Post Ready": "bg-green-100 text-green-800 border-green-200",
+  "Error": "bg-red-500 text-white border-red-600",
   "Working": "bg-blue-100 text-blue-800 border-blue-200",
   "Hold": "bg-red-100 text-red-800 border-red-200",
   "Pending Transcription": "bg-yellow-100 text-yellow-900 border-yellow-200",
