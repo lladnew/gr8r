@@ -1,3 +1,4 @@
+// v1.4.9 gr8r-videouploads-worker CHANGED: removed channel match grafana success log missed previously
 // v1.4.8 gr8r-videouploads-worker CHANGED: updated to safeLog function and tightened logs to revised standards
 // v1.4.7 gr8r-videouploads-worker FIXED: publishing_status issue
 // v1.4.6 gr8r-videouploads-worker FIXED: video_id issue
@@ -338,21 +339,6 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
             publishing_requested = channelsList.length;
             publishing_matched = matched.length;
             publishing_unmatched = unmatched.length;
-
-            // Log match summary
-            await safeLog(env, {
-                level: "info",
-                service: "channels",
-                message: "channels resolved",
-                meta: {
-                    ...baseMeta({ request_id, route, method, origin }),
-                    status_code: 200,
-                    ok: true,
-                    channels_requested: channelsList.length,
-                    channels_matched: matched.length,
-                    channels_unmatched: unmatched.length
-                }
-                });
 
             // Log each unmatched as error and skip
             for (const name of unmatched) {
