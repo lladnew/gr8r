@@ -1,3 +1,4 @@
+// v1.0.8 gr8r-revai-worker CHANGED: removed grafana success logging to reduce noise
 // v1.0.8 gr8r-revai-worker
 // - ADDED: "strict" custom vocab enforcement line:46
 // v1.0.7 gr8r-revai-worker
@@ -47,7 +48,6 @@ const revPayload = {
   }
 };
 
-
         const revResponse = await fetch("https://api.rev.ai/speechtotext/v1/jobs", {
           method: "POST",
           headers: {
@@ -67,14 +67,14 @@ const revPayload = {
           resultJson = { raw: resultText };
         }
 
+      // Only log if there's an error
+      if (!success) {
         await env.GRAFANA.fetch("https://internal/api/grafana", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            level: success ? "info" : "error",
-            message: success
-              ? "Rev.ai transcription job started"
-              : `Rev.ai error: ${resultText}`,
+            level: "error",
+            message: `Rev.ai error: ${resultText}`,
             meta: {
               source: "gr8r-revai-worker",
               service: "transcribe",
@@ -82,10 +82,11 @@ const revPayload = {
               metadata: title,
               callback_url,
               revStatus: revResponse.status,
-              ...(success ? {} : { revResponse: resultText })
+              revResponse: resultText
             }
           })
         });
+      }
 
         return new Response(JSON.stringify(resultJson), {
           status: revResponse.status,
@@ -135,20 +136,6 @@ const revPayload = {
         const transcriptText = await revFetch.text();
 //new logging block inserted v1.0.7        
 console.log('[revai-worker] Fetched transcript:', transcriptText);
-await env.GRAFANA.fetch("https://internal/api/grafana", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    level: "debug",
-    message: "Transcript fetch result",
-    meta: {
-      source: "gr8r-revai-worker",
-      service: "fetch-transcript",
-      fetch_status: revFetch.status,
-      snippet: transcriptText.slice(0, 100)
-    }
-  })
-});
 
         if (!revFetch.ok) {
           throw new Error(`Transcript fetch failed: ${revFetch.status}`);
