@@ -1,4 +1,5 @@
-// v1.0.8 gr8r-revai-worker CHANGED: removed grafana success logging to reduce noise
+// v1.1.0 gr8r-revai-worker CHANGED: added getSecret and createLogger using safeLog - new standards
+// v1.0.9 gr8r-revai-worker CHANGED: removed grafana success logging to reduce noise
 // v1.0.8 gr8r-revai-worker
 // - ADDED: "strict" custom vocab enforcement line:46
 // v1.0.7 gr8r-revai-worker
@@ -21,37 +22,73 @@
 // v1.0.3 gr8r-revai-worker
 // - ADDED: `name` field set to `metadata.title` for cleaner display in Rev.ai dashboard
 
+// Shared libs
+import { getSecret } from "../../../lib/secrets.js";
+import { createLogger } from "../../../lib/grafana.js";
+
+// Safe logger: always use this; caches underlying logger internally
+let _logger;
+const safeLog = async (env, entry) => {
+  try {
+    _logger = _logger || createLogger({ source: "gr8r-revai-worker" });
+    await _logger(env, entry);
+  } catch (e) {
+    // Never throw from logging
+    console.log("LOG_FAIL", entry?.service || "unknown", e?.stack || e?.message || e);
+  }
+};
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const route = url.pathname;
+    const method = request.method;
+    const request_id = (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
     // === Transcription Job Creation ===
-    if (url.pathname === "/api/revai/transcribe" && request.method === "POST") {
+    if (route === "/api/revai/transcribe" && method === "POST") {
+      const t0 = Date.now();
       try {
         const body = await request.json();
         const { media_url, metadata, callback_url } = body;
+                if (!media_url || !metadata || !callback_url) {
+                  await safeLog(env, {
+                    level: "warn",
+                    service: "transcribe",
+                    message: "Missing required fields",
+                    meta: {
+                      request_id,
+                      route,
+                      method,
+                      status_code: 400,
+                      ok: false,
+                      duration_ms: Date.now() - t0,
+                      reason: "missing_required_fields"
+                    }
+                  });
+                  return new Response(JSON.stringify({ error: "Bad Request", message: "Missing required fields" }), {
+                    status: 400,
+                    headers: { "Content-Type": "application/json" }
+                  });
 
-        if (!media_url || !metadata || !callback_url) {
-          return new Response("Missing required fields", { status: 400 });
-        }
-
+                }
         const title = typeof metadata === "string" ? metadata : metadata.title || "Untitled";
 
-const revPayload = {
-  media_url,
-  metadata: title,
-  name: title,
-  callback_url,
-  custom_vocabulary_id: "cvjFZZkyCf3NryGNlL",
-  custom_vocabulary_parameters: {
-    strict: true
-  }
-};
+        const revPayload = {
+          media_url,
+          metadata: title,
+          name: title,
+          callback_url,
+          custom_vocabulary_id: "cvjFZZkyCf3NryGNlL",
+          custom_vocabulary_parameters: {
+            strict: true
+          }
+        };
 
         const revResponse = await fetch("https://api.rev.ai/speechtotext/v1/jobs", {
           method: "POST",
           headers: {
-            "Authorization": `Bearer ${env.REVAI_API_KEY}`,
+            "Authorization": `Bearer ${await getSecret(env, "REVAI_API_KEY")}`,
             "Content-Type": "application/json"
           },
           body: JSON.stringify(revPayload)
@@ -60,83 +97,112 @@ const revPayload = {
         const resultText = await revResponse.text();
         const success = revResponse.ok;
 
-        let resultJson = {};
+        let resultJson;
         try {
           resultJson = JSON.parse(resultText);
-        } catch (e) {
-          resultJson = { raw: resultText };
+        } catch {
+          resultJson = null; // treat as unknown/invalid JSON
         }
 
-      // Only log if there's an error
-      if (!success) {
-        await env.GRAFANA.fetch("https://internal/api/grafana", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        if (!success || !resultJson || !resultJson.id) {
+          // error path (keeps your existing meta)
+          await safeLog(env, {
             level: "error",
-            message: `Rev.ai error: ${resultText}`,
+            service: "transcribe",
+            message: "Rev.ai job create failed",
             meta: {
-              source: "gr8r-revai-worker",
-              service: "transcribe",
+              request_id,
+              route,
+              method,
+              status_code: revResponse.status,
+              ok: false,
+              duration_ms: Date.now() - t0,
+              reason: success ? "revai_success_but_invalid_json" : "revai_failed_status",
               media_url,
-              metadata: title,
               callback_url,
-              revStatus: revResponse.status,
-              revResponse: resultText
+              title,
+              rev_response_snippet: resultText.slice(0, 200)
             }
-          })
-        });
-      }
+          });
+        } else {
+          // success breadcrumb w/ job id
+          const job_id = resultJson?.id ?? resultJson?.job?.id;
+          console.log("[revai-worker] transcribe ok", {
+            title,
+            job_id,
+            status: revResponse.status,
+            duration_ms: Date.now() - t0
+          });
+        }
 
-        return new Response(JSON.stringify(resultJson), {
+        return new Response(JSON.stringify(resultJson ?? { raw: resultText }), {
           status: revResponse.status,
           headers: { "Content-Type": "application/json" }
         });
 
-      } catch (err) {
-        await env.GRAFANA.fetch("https://internal/api/grafana", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            level: "error",
-            message: "Unhandled Rev.ai job error",
-            meta: {
-              source: "gr8r-revai-worker",
-              service: "transcribe",
-              error: err.message,
-              stack: err.stack
-            }
-          })
-        });
 
-        return new Response(JSON.stringify({
-          error: "Internal error",
-          message: err.message
-        }), { status: 500, headers: { "Content-Type": "application/json" } });
+      } catch (err) {
+        await safeLog(env, {
+          level: "error",
+          service: "transcribe",
+          message: "Unhandled Rev.ai job error",
+          meta: {
+            request_id,
+            route,
+            method,
+            status_code: 500,
+            ok: false,
+            duration_ms: Date.now() - t0,
+            reason: "transcribe_exception",
+            error: err.message,
+            stack: err.stack
+          }
+        });
+        return new Response(JSON.stringify({ error: "Internal error", message: err.message }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" }
+        });
       }
     }
-
     // === Transcript Retrieval ===
-    if (url.pathname === "/api/revai/fetch-transcript" && request.method === "POST") {
+    if (route === "/api/revai/fetch-transcript" && method === "POST") {
+      const t0 = Date.now();
+      let job_id;
       try {
-        const { job_id } = await request.json();
-
-        if (!job_id) {
-          return new Response("Missing job_id", { status: 400 });
-        }
+        const body = await request.json();
+        job_id = body?.job_id;
+          if (!job_id) {
+            await safeLog(env, {
+              level: "warn",
+              service: "fetch-transcript",
+              message: "Missing job_id",
+              meta: {
+                request_id,
+                route,
+                method,
+                status_code: 400,
+                ok: false,
+                duration_ms: Date.now() - t0,
+                reason: "missing_job_id"
+              }
+            });
+            return new Response(JSON.stringify({ error: "Bad Request", message: "Missing job_id" }), {
+              status: 400,
+              headers: { "Content-Type": "application/json" }
+            });
+          }
 
         const revFetch = await fetch(`https://api.rev.ai/speechtotext/v1/jobs/${job_id}/transcript`, {
           method: "GET",
           headers: {
-            Authorization: `Bearer ${env.REVAI_API_KEY}`,
+            Authorization: `Bearer ${await getSecret(env, "REVAI_API_KEY")}`,
             Accept: "text/plain"
           }
         });
 
         const transcriptText = await revFetch.text();
-//new logging block inserted v1.0.7        
-console.log('[revai-worker] Fetched transcript:', transcriptText);
-
+        console.log("[revai-worker] Fetched transcript (snippet):", transcriptText.slice(0, 200)); 
+        
         if (!revFetch.ok) {
           throw new Error(`Transcript fetch failed: ${revFetch.status}`);
         }
@@ -147,28 +213,33 @@ console.log('[revai-worker] Fetched transcript:', transcriptText);
         });
 
       } catch (err) {
-        await env.GRAFANA.fetch("https://internal/api/grafana", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          await safeLog(env, {
             level: "error",
+            service: "fetch-transcript",
             message: "Transcript fetch failure",
             meta: {
-              source: "gr8r-revai-worker",
-              service: "fetch-transcript",
+              request_id,
+              route,
+              method,
+              status_code: 500,
+              ok: false,
+              duration_ms: Date.now() - t0,
+              reason: "revai_fetch_exception",
+              job_id,
               error: err.message,
               stack: err.stack
             }
-          })
+          });
+        return new Response(JSON.stringify({ error: "Transcript fetch failed", message: err.message }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" }
         });
-
-        return new Response(JSON.stringify({
-          error: "Transcript fetch failed",
-          message: err.message
-        }), { status: 500, headers: { "Content-Type": "application/json" } });
       }
     }
 
-    return new Response("Not found", { status: 404 });
+    return new Response(JSON.stringify({ error: "Not Found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" }
+    });
   }
 };

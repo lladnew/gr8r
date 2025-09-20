@@ -3,6 +3,22 @@ main = "src/index.js"
 compatibility_date = "2025-06-17"
 account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
 
-[[services]]
-binding = "GRAFANA"
-service = "gr8r-grafana-worker"
+[[secrets_store_secrets]]
+binding = "GRAFANACLOUD_GR8R_LOGS_KEY"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "GRAFANACLOUD_GR8R_LOGS_KEY"
+
+[[secrets_store_secrets]]
+binding = "GRAFANACLOUD_GR8R_LOGS_USER"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "GRAFANACLOUD_GR8R_LOGS_USER"
+
+[[secrets_store_secrets]]
+binding = "GRAFANACLOUD_GR8R_LOGS_URL"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "GRAFANACLOUD_GR8R_LOGS_URL"
+
+[[secrets_store_secrets]]
+binding = "REVAI_API_KEY"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "REVAI_API_KEY"
