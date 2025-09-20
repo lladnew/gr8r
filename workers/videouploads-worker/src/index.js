@@ -1,3 +1,4 @@
+// v1.4.8 gr8r-videouploads-worker CHANGED: updated to safeLog function and tightened logs to revised standards
 // v1.4.7 gr8r-videouploads-worker FIXED: publishing_status issue
 // v1.4.6 gr8r-videouploads-worker FIXED: video_id issue
 // v1.4.5 gr8r-videouploads-worker ADDED: DEBUG logging tweaks
@@ -14,9 +15,19 @@
 // new getSecret function module
 import { getSecret } from "../../../lib/secrets.js";
 
-// new Grafana logging shared script
+// Grafana logging shared script
 import { createLogger } from "../../../lib/grafana.js";
-const log = createLogger({ source: "gr8r-videouploads-worker" });
+// Safe logger: always use this; caches underlying logger internally
+let _logger;
+const safeLog = async (env, entry) => {
+  try {
+    _logger = _logger || createLogger({ source: "gr8r-videouploads-worker" });
+    await _logger(env, entry);
+  } catch (e) {
+    // Never throw from logging
+    console.log('LOG_FAIL', entry?.service || 'unknown', e?.stack || e?.message || e);
+  }
+};
 
 function sanitizeForDB1(obj) {
   return Object.fromEntries(
@@ -42,42 +53,40 @@ export default {
 
     const contentType = request.headers.get('content-type') || 'none';
     console.log('[videouploads-worker] Content-Type:', contentType);
-
+    
+    // Summary flags & counters for final Grafana entry
+    let r2_ok = false;
+    let airtable_ok = false;
+    let db1_ok = false;
+    let publishing_requested = 0;
+    let publishing_matched = 0;
+    let publishing_unmatched = 0;
+    let publishing_inserted = 0; // increment when a publishing POST returns ok
+    let revai_ok = false;
+    let revai_job_id = null;
+  
     // ADDED: per-request context for logging
         const request_id = crypto.randomUUID();
         const route = new URL(request.url).pathname;
         const method = request.method;
         const origin = request.headers.get('origin') || null;
 
-        // ADDED: initial request trace (debug)
-        try {
-        await log(env, {
-            level: "debug",
-            service: "request",
-            message: "request received",
-            meta: {
-            ...baseMeta({ request_id, route, method, origin }),
-            content_type: request.headers.get('content-type') || 'none',
-            ok: true
-            }
+        console.log("[request] received", {
+            content_type: contentType || 'none'
         });
-        } catch {}
 
     if (request.method !== 'POST') {
-        try {
-            await log(env, {
+        await safeLog(env, {
             level: "warn",
             service: "request",
             message: "method not allowed",
             meta: {
                 ...baseMeta({ request_id, route, method, origin }),
-                status: 405,
+                status_code: 405,
                 ok: false,
                 reason: "method_not_allowed"
             }
-            });
-        } catch {}
-        return new Response("Method Not Allowed", { status: 405 });
+            });        return new Response("Method Not Allowed", { status: 405 });
         }
 
     const url = new URL(request.url);
@@ -101,22 +110,13 @@ export default {
             .split(/\r?\n/)        // split on newlines from Shortcut
             .map(s => s.trim())
             .filter(Boolean);
-         // Safe parse log
-        try {
-        await log(env, {
-            level: "debug",
-            service: "request",
-            message: "parsed request body",
-            meta: {
-            ...baseMeta({ request_id, route, method, origin }),
-            ok: true,
+
+        console.log("[request] parsed body", {
             title: (title || "").slice(0, 120),
             video_type: videoType || null,
             scheduled_at: scheduleDateTime || null,
             channels: channelsList || null
-            }
         });
-        } catch {}
 
         // TEMP: log normalized channels for verification
         console.log("[videouploads-worker] Channels (normalized):", JSON.stringify(channelsList));
@@ -128,22 +128,20 @@ export default {
         console.log('  filename:', filename);
         
         if (!(filename && title && videoType)) {
-        try {
-            await log(env, {
+        await safeLog(env, {
             level: "warn",
             service: "request",
             message: "missing required fields",
             meta: {
                 ...baseMeta({ request_id, route, method, origin }),
-                status: 400,
+                status_code: 400,
                 ok: false,
                 reason: "missing_fields",
                 title: title || null,
                 video_type: videoType || null
                 }
-                });
-            } catch {}
-            return new Response("Missing required fields", { status: 400 });
+                });            
+                return new Response("Missing required fields", { status: 400 });
             }
 
 
@@ -154,45 +152,30 @@ export default {
         const r2CheckStart = now();
         const object = await env.VIDEO_BUCKET.get(objectKey);
         if (!object) {
-        try {
-            await log(env, {
+        await safeLog(env, {
             level: "warn",
             service: "r2-check",
             message: "R2 object missing",
             meta: {
                 ...baseMeta({ request_id, route, method, origin }),
                 duration_ms: durationMs(r2CheckStart),
-                status: 404,
+                status_code: 404,
                 ok: false,
                 reason: "r2_not_found",
                 object_key: objectKey,
                 title: title.slice(0, 120)
             }
-            });
-        } catch {}
-        return new Response("Video file not found in R2", { status: 404 });
+            });        return new Response("Video file not found in R2", { status: 404 });
         }
         
-        try {
-            await log(env, {
-                level: "info",
-                service: "r2-check",
-                message: "R2 object verified",
-                meta: {
-                ...baseMeta({ request_id, route, method, origin }),
-                duration_ms: durationMs(r2CheckStart),
-                status: 200,
-                ok: true,
-                object_key: objectKey,
-                title: title.slice(0, 120)
-                }
-        });
-        } catch {}
+        r2_ok = true;
+        console.log("[r2-check] verified", { objectKey, title: title?.slice(0,120) });
 
         // Attempt to read metadata from R2 object
         let contentType = object.httpMetadata?.contentType || "unknown";
         let contentLength = object.size || null;
         const atStart = now();
+        
         // First Airtable update with new fields
         const airtableResponse = await env.AIRTABLE.fetch(new Request("https://internal/api/airtable/update", {
           method: "POST",
@@ -217,40 +200,27 @@ export default {
         
         if (airtableResponse.ok) {
         try { airtableData = await airtableResponse.json(); } catch { airtableData = null; }
-        try {
-            await log(env, {
-            level: "info",
-            service: "airtable-upsert",
-            message: "Airtable upsert ok",
-            meta: {
-                ...baseMeta({ request_id, route, method, origin }),
-                duration_ms: durationMs(atStart),
-                status: 200,
-                ok: true,
-                title: title.slice(0, 120),
-                video_type: videoType,
-                scheduled_at: scheduleDateTime || null
-            }
-            });
-        } catch {}
+        console.log("[airtable-upsert] ok", {
+            title: title?.slice(0,120),
+            videoType,
+            scheduleDateTime
+        });
+        airtable_ok = true;
         } else {
         const atStatus = airtableResponse.status;
-        try {
-            await log(env, {
+        await safeLog(env, {
             level: "error",
             service: "airtable-upsert",
             message: "Airtable upsert failed",
             meta: {
                 ...baseMeta({ request_id, route, method, origin }),
                 duration_ms: durationMs(atStart),
-                status: atStatus,
+                status_code: atStatus,
                 ok: false,
                 reason: "airtable_error",
                 title: title.slice(0, 120)
             }
-            });
-        } catch {}
-        const text = await airtableResponse.text();
+            });        const text = await airtableResponse.text();
         throw new Error(`Airtable create failed: ${text}`);
         }
 
@@ -288,58 +258,43 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
         let videoId = db1Data?.video_id ?? null;
 
         if (!db1Response.ok) {
-        try {
-            await log(env, {
+        await safeLog(env, {
             level: "error",
             service: "db1-upsert",
             message: "DB1 upsert failed",
             meta: {
                 ...baseMeta({ request_id, route, method, origin }),
                 duration_ms: durationMs(db1Start),
-                status: db1Status,
+                status_code: db1Status,
                 ok: false,
                 reason: "db1_error",
                 title: title.slice(0, 120)
             }
-            });
-        } catch {}
-        throw new Error(`DB1 update failed: ${db1Text}`);
+            });        throw new Error(`DB1 update failed: ${db1Text}`);
         } else {
-        try {
-            await log(env, {
-            level: "info",
-            service: "db1-upsert",
-            message: "DB1 upsert ok",
-            meta: {
-                ...baseMeta({ request_id, route, method, origin }),
-                duration_ms: durationMs(db1Start),
-                status: db1Status,
-                ok: true,
-                title: title.slice(0, 120)
-            }
-            });
-        } catch {}
+        db1_ok = true;
+        console.log("[db1-upsert] ok", {
+            title: title?.slice(0,120),
+            videoId
+        });
         }
         // === Publishing rows for selected channels (only when scheduled_at is present) ===
         try {
         // Guard: requires schedule AND at least one channel
         if (!scheduleDateTime || !channelsList.length) {
-            try {
-            await log(env, {
+            await safeLog(env, {
                 level: "info",
                 service: "publishing",
                 message: "publishing skipped",
                 meta: {
                 ...baseMeta({ request_id, route, method, origin }),
                 ok: true,
-                status: 200,
+                status_code: 200,
                 reason: !scheduleDateTime ? "no_schedule" : "no_channels",
                 scheduled_at: scheduleDateTime || null,
                 channels_count: channelsList.length
                 }
-            });
-            } catch {}
-        } else {
+            });        } else {
             // Fetch channels list from DB1 and match case-insensitively on display_name or key
             const chStart = now();
             const channelsResp = await env.DB1.fetch("https://gr8r-db1-worker/db1/channels", {
@@ -350,21 +305,18 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
             });
 
             if (!channelsResp.ok) {
-            try {
-                await log(env, {
+            await safeLog(env, {
                 level: "error",
                 service: "channels",
                 message: "channels fetch failed",
                 meta: {
                     ...baseMeta({ request_id, route, method, origin }),
                     duration_ms: durationMs(chStart),
-                    status: channelsResp.status,
+                    status_code: channelsResp.status,
                     ok: false,
                     reason: "channels_fetch_error"
                 }
-                });
-            } catch {}
-            throw new Error(`Channels fetch failed: ${channelsResp.status}`);
+                });            throw new Error(`Channels fetch failed: ${channelsResp.status}`);
             }
 
             const chJson = await channelsResp.json(); // expected array: [{ id, key, display_name }, ...]
@@ -383,138 +335,115 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
             if (hit) matched.push({ name: raw, channel_id: hit.id, key: hit.key, display_name: hit.display_name });
             else unmatched.push(raw);
             }
+            publishing_requested = channelsList.length;
+            publishing_matched = matched.length;
+            publishing_unmatched = unmatched.length;
 
             // Log match summary
-            try {
-            await log(env, {
+            await safeLog(env, {
                 level: "info",
                 service: "channels",
                 message: "channels resolved",
                 meta: {
-                ...baseMeta({ request_id, route, method, origin }),
-                ok: true,
-                status: 200,
-                channels_requested: channelsList.length,
-                channels_matched: matched.length,
-                channels_unmatched: unmatched.length,
-                // safe to include small arrays here
-                unmatched: unmatched
+                    ...baseMeta({ request_id, route, method, origin }),
+                    status_code: 200,
+                    ok: true,
+                    channels_requested: channelsList.length,
+                    channels_matched: matched.length,
+                    channels_unmatched: unmatched.length
                 }
-            });
-            } catch {}
+                });
 
             // Log each unmatched as error and skip
             for (const name of unmatched) {
-            try {
-                await log(env, {
+            await safeLog(env, {
                 level: "error",
                 service: "publishing",
                 message: "channel not found; publishing skipped",
                 meta: {
                     ...baseMeta({ request_id, route, method, origin }),
                     ok: false,
-                    status: 404,
+                    status_code: 404,
                     reason: "channel_not_found",
                     channel_name: name,
                     title: (title || "").slice(0, 120),
                     scheduled_at: scheduleDateTime || null
                 }
-                });
-            } catch {}
-            }
+                });            }
 
             // Insert a Publishing row per matched channel
             for (const m of matched) {
-            const pubStart = now();
-            const pubBody = sanitizeForDB1({
-                video_id: videoId || undefined,
-                title,
-                channel_id: m.channel_id,
-                channel_key: m.key, // REQUIRED by db1-worker
-                scheduled_at: scheduleDateTime,
-                status: "pending"
-            });
-// TEMP: show what we're sending
-console.log("[videouploads-worker] Publishing payload:", JSON.stringify(pubBody)); //DEBUG
-
-            const pubResp = await env.DB1.fetch("https://gr8r-db1-worker/db1/publishing", {
-                method: "POST",
-                headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${db1Key}`
-                },
-                body: JSON.stringify(pubBody)
-            });
-
-            if (!pubResp.ok) {
-            // TEMP: capture DB1 response body
-            let errText = "";
-            try { errText = await pubResp.text(); } catch {}
-
-            // Console for quick tail reading
-            console.log("[videouploads-worker] Publishing response:", pubResp.status, errText.slice(0, 800));
-
-            // Structured log (short snippet)
-            try {
-                await log(env, {
-                level: "error",
-                service: "publishing",
-                message: "publishing upsert failed",
-                meta: {
-                    ...baseMeta({ request_id, route, method, origin }),
-                    duration_ms: durationMs(pubStart),
-                    status: pubResp.status,
-                    ok: false,
-                    reason: "publishing_error",
-                    title: (title || "").slice(0, 120),
+                const pubStart = now();
+                const pubBody = sanitizeForDB1({
+                    video_id: videoId || undefined,
+                    title,
                     channel_id: m.channel_id,
-                    channel_name: m.name,
+                    channel_key: m.key, // REQUIRED by db1-worker
+                    scheduled_at: scheduleDateTime,
+                    status: "pending"
+                });
+                // TEMP: show what we're sending
+                console.log("[videouploads-worker] Publishing payload:", JSON.stringify(pubBody)); //DEBUG
+
+                const pubResp = await env.DB1.fetch("https://gr8r-db1-worker/db1/publishing", {
+                    method: "POST",
+                    headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${db1Key}`
+                    },
+                    body: JSON.stringify(pubBody)
+                });
+
+                if (!pubResp.ok) {
+                // TEMP: capture DB1 response body
+                let errText = "";
+                try { errText = await pubResp.text(); } catch {}
+
+                // Console for quick tail reading
+                console.log("[videouploads-worker] Publishing response:", pubResp.status, errText.slice(0, 800));
+
+                // Structured log (short snippet)
+                await safeLog(env, {
+                    level: "error",
+                    service: "publishing",
+                    message: "publishing upsert failed",
+                    meta: {
+                        ...baseMeta({ request_id, route, method, origin }),
+                        duration_ms: durationMs(pubStart),
+                        status_code: pubResp.status,
+                        ok: false,
+                        reason: "publishing_error",
+                        title: (title || "").slice(0, 120),
+                        channel_id: m.channel_id,
+                        channel_name: m.name,
+                        channel_key: m.key,
+                        video_id: videoId ?? null,
+                        scheduled_at: scheduleDateTime || null,
+                        server_msg: errText.slice(0, 200)
+                    }
+                    });            continue;
+                }
+                publishing_inserted++;
+                console.log("[publishing] upsert ok", {
+                    channel_id: m.channel_id,
                     channel_key: m.key,
-                    video_id: videoId ?? null,
-                    scheduled_at: scheduleDateTime || null,
-                    server_msg: errText.slice(0, 200)
-                }
-                });
-            } catch {}
-            continue;
-            }
-
-            try {
-                await log(env, {
-                level: "info",
-                service: "publishing",
-                message: "publishing upsert ok",
-                meta: {
-                    ...baseMeta({ request_id, route, method, origin }),
-                    duration_ms: durationMs(pubStart),
-                    status: 200,
-                    ok: true,
-                    title: (title || "").slice(0, 120),
-                    channel_id: m.channel_id,
-                    channel_name: m.name,
-                    scheduled_at: scheduleDateTime || null,
                     used_video_id: !!videoId
-                }
                 });
-            } catch {}
-            }
+           }
         }
         } catch (err) {
-        try {
-            await log(env, {
+        await safeLog(env, {
             level: "error",
             service: "publishing",
             message: "publishing exception",
             meta: {
                 ...baseMeta({ request_id, route, method, origin }),
-                status: 500,
+                status_code: 500,
                 ok: false,
                 error: err.message,
                 stack: err.stack
             }
-            });
-        } catch {}
-        // do not rethrow; publishing is auxiliary to main video flow
+            });        // do not rethrow; publishing is auxiliary to main video flow
         }
 
         // Rev.ai logic
@@ -533,22 +462,19 @@ console.log("[videouploads-worker] Publishing payload:", JSON.stringify(pubBody)
         try { revaiJson = await revaiResponse.json(); } catch {}
 
         if (!revaiResponse.ok || !revaiJson?.id) {
-        try {
-            await log(env, {
+        await safeLog(env, {
             level: "error",
             service: "revai-submit",
             message: "Revai submission failed",
             meta: {
                 ...baseMeta({ request_id, route, method, origin }),
                 duration_ms: durationMs(revStart),
-                status: revaiResponse.status,
+                status_code: revaiResponse.status,
                 ok: false,
                 reason: "revai_error",
                 title: title.slice(0, 120)
             }
-            });
-        } catch {}
-        return new Response(JSON.stringify({
+            });        return new Response(JSON.stringify({
             error: "Rev.ai job failed",
             message: revaiJson
         }), {
@@ -556,22 +482,12 @@ console.log("[videouploads-worker] Publishing payload:", JSON.stringify(pubBody)
             headers: { "Content-Type": "application/json" }
         });
         }
-
-        try {
-        await log(env, {
-            level: "info",
-            service: "revai-submit",
-            message: "Revai submission ok",
-            meta: {
-            ...baseMeta({ request_id, route, method, origin }),
-            duration_ms: durationMs(revStart),
-            status: 200,
-            ok: true,
-            revai_job_id: revaiJson.id,
-            title: title.slice(0, 120)
-            }
+        revai_ok = true;
+        revai_job_id = revaiJson.id;
+        console.log("[revai-submit] ok", {
+            revai_job_id: revaiJson?.id,
+            title: title?.slice(0,120)
         });
-        } catch {}
 
         // Airtable update for Rev.ai Transcript ID      
         const atFollowStart = now();
@@ -588,39 +504,23 @@ console.log("[videouploads-worker] Publishing payload:", JSON.stringify(pubBody)
         })
         }));
         if (!atFollow.ok) {
-        try {
-            await log(env, {
+        await safeLog(env, {
             level: "error",
             service: "airtable-followup",
             message: "Airtable transcript failed",
             meta: {
                 ...baseMeta({ request_id, route, method, origin }),
                 duration_ms: durationMs(atFollowStart),
-                status: atFollow.status,
+                status_code: atFollow.status,
                 ok: false,
                 reason: "airtable_error",
                 revai_job_id: revaiJson.id,
                 title: title.slice(0, 120)
             }
-            });
-        } catch {}
+            });        
         } else {
-        try {
-            await log(env, {
-            level: "info",
-            service: "airtable-followup",
-            message: "Airtable transcript ok",
-            meta: {
-                ...baseMeta({ request_id, route, method, origin }),
-                duration_ms: durationMs(atFollowStart),
-                status: 200,
-                ok: true,
-                revai_job_id: revaiJson.id,
-                title: title.slice(0, 120)
+            console.log("[airtable-followup] transcript ok", { revai_job_id: revaiJson?.id });
             }
-            });
-        } catch {}
-        }
 
         // DB1 follow-up update for Rev.ai job
         try {
@@ -644,58 +544,38 @@ console.log("[videouploads-worker] Publishing payload:", JSON.stringify(pubBody)
         await db1FollowupResponse.text(); // drain body; do not log it
 
         if (!db1FollowupResponse.ok) {
-            try {
-            await log(env, {
+            await safeLog(env, {
                 level: "error",
                 service: "db1-followup",
                 message: "DB1 transcript failed",
                 meta: {
                 ...baseMeta({ request_id, route, method, origin }),
                 duration_ms: durationMs(db1FollowStart),
-                status: db1FollowStatus,
+                status_code: db1FollowStatus,
                 ok: false,
                 reason: "db1_error",
                 revai_job_id: revaiJson.id,
                 title: title.slice(0, 120)
                 }
-            });
-            } catch {}
-            throw new Error(`DB1 transcript update failed: status ${db1FollowStatus}`);
+            });            throw new Error(`DB1 transcript update failed: status ${db1FollowStatus}`);
         }
 
-        try {
-            await log(env, {
-            level: "info",
-            service: "db1-followup",
-            message: "DB1 transcript ok",
-            meta: {
-                ...baseMeta({ request_id, route, method, origin }),
-                duration_ms: durationMs(db1FollowStart),
-                status: db1FollowStatus,
-                ok: true,
-                revai_job_id: revaiJson.id,
-                title: title.slice(0, 120)
-            }
-            });
-        } catch {}
+        console.log("[db1-followup] transcript ok", { revai_job_id: revaiJson?.id });
 
         } catch (err) {
-        try {
-            await log(env, {
+        await safeLog(env, {
             level: "error",
             service: "db1-followup",
             message: "DB1 transcript exception",
             meta: {
                 ...baseMeta({ request_id, route, method, origin }),
-                status: 500,
+                status_code: 500,
                 ok: false,
                 error: err.message,
                 stack: err.stack,
                 title: title ? title.slice(0, 120) : null
             }
-            });
-        } catch {}
-        throw err;
+            });        throw err;
         }
 
         // RETAINED: Final response to Apple Shortcut
@@ -713,20 +593,37 @@ console.log("[videouploads-worker] Publishing payload:", JSON.stringify(pubBody)
           db1Data
         };
 
-        try {
-            await log(env, {
-                level: "info",
-                service: "response",
-                message: "request complete",
-                meta: {
+        await safeLog(env, {
+            level: "info",
+            service: "response",
+            message: "request complete",
+            meta: {
                 ...baseMeta({ request_id, route, method, origin }),
-                status: 200,
+                status_code: 200,
                 ok: true,
                 duration_ms: durationMs(reqStart),
-                title: title.slice(0, 120)
-                }
+
+                // domain summary
+                title: title?.slice(0, 120) || null,
+                video_type: videoType || null,
+                scheduled_at: scheduleDateTime || null,
+
+                r2_ok,
+                airtable_ok,
+                db1_ok,
+                video_id: videoId ?? null,
+
+                publishing: {
+                requested: publishing_requested,
+                matched: publishing_matched,
+                unmatched: publishing_unmatched,
+                inserted: publishing_inserted
+                },
+
+                revai_ok,
+                revai_job_id
+            }
             });
-            } catch {}
 
         return new Response(JSON.stringify(responseBody), {
           status: 200,
@@ -734,21 +631,18 @@ console.log("[videouploads-worker] Publishing payload:", JSON.stringify(pubBody)
         });
 
       } catch (err) {
-        try {
-        await log(env, {
+        await safeLog(env, {
             level: "error",
             service: "response",
             message: "request failed",
             meta: {
             ...baseMeta({ request_id, route, method, origin }),
-            status: 500,
+            status_code: 500,
             ok: false,
             error: err.message,
             stack: err.stack
             }
          });
-        } catch {}
-
         return new Response(JSON.stringify({
           error: "Unhandled upload failure",
           message: err.message,
@@ -761,19 +655,16 @@ console.log("[videouploads-worker] Publishing payload:", JSON.stringify(pubBody)
       }
     }
 
-    try {
-        await log(env, {
+    await safeLog(env, {
             level: "warn",
             service: "request",
             message: "forbidden route",
             meta: {
             ...baseMeta({ request_id, route, method, origin }),
-            status: 403,
+            status_code: 403,
             ok: false,
             reason: "forbidden_route"
             }
-        });
-        } catch {}
-        return new Response("Forbidden", { status: 403 });
+        });        return new Response("Forbidden", { status: 403 });
   }
 };
