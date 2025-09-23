@@ -1,3 +1,4 @@
+//gr8r-db1-worker v1.3.9 EDIT: added 'scheduling' as a publishing.status option
 //gr8r-db1-worker v1.3.8 CHANGE: switch to safeLog approach and tighten logging by removing success messages
 //gr8r-db1-worker v1.3.7 ADDED: 'Error' to the allowed video_status field
 //gr8r-db1-worker v1.3.6 FIX: mass updates creating new phantom records
@@ -60,31 +61,31 @@ async function getInternalKey(env) {
 }
 
 function getCorsHeaders(origin) {
-	const allowedOrigins = [
-		"https://admin.gr8r.com",
-		"https://test.admin.gr8r.com",
-		"http://localhost:5173",
-		"https://dbadmin-react-site.pages.dev",
-	];
+  const allowedOrigins = [
+    "https://admin.gr8r.com",
+    "https://test.admin.gr8r.com",
+    "http://localhost:5173",
+    "https://dbadmin-react-site.pages.dev",
+  ];
 
-	const headers = {
-		"Access-Control-Allow-Headers": "Authorization, Content-Type, Cf-Access-Jwt-Assertion",
-		"Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-		"Access-Control-Allow-Credentials": "true",
-	};
+  const headers = {
+    "Access-Control-Allow-Headers": "Authorization, Content-Type, Cf-Access-Jwt-Assertion",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Credentials": "true",
+  };
 
-	if (origin && allowedOrigins.includes(origin)) {
-		headers["Access-Control-Allow-Origin"] = origin;
-		headers["Vary"] = "Origin";
-	}
+  if (origin && allowedOrigins.includes(origin)) {
+    headers["Access-Control-Allow-Origin"] = origin;
+    headers["Vary"] = "Origin";
+  }
 
-	return headers;
+  return headers;
 }
 
 function base64urlToUint8Array(base64url) {
-	const base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
-	const binary = atob(base64);
-	return Uint8Array.from(binary, (c) => c.charCodeAt(0));
+  const base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(base64);
+  return Uint8Array.from(binary, (c) => c.charCodeAt(0));
 }
 
 // Check for internal Bearer key auth using Secrets Store (cached)
@@ -92,22 +93,22 @@ async function checkInternalKey(request, env) {
   const authHeader = request.headers.get("Authorization");
   if (!authHeader?.startsWith("Bearer ")) return false;
 
-// DEFINE providedKey first
-const providedKey = authHeader.slice(7).trim(); // Skip "Bearer ", trim in case of newline/space
+  // DEFINE providedKey first
+  const providedKey = authHeader.slice(7).trim(); // Skip "Bearer ", trim in case of newline/space
 
-const secret = await getInternalKey(env);
-return providedKey && secret && (providedKey === secret);
+  const secret = await getInternalKey(env);
+  return providedKey && secret && (providedKey === secret);
 }
 
 // v1.2.9 ADD: whitelist for editable columns and "clearable" subset
 const EDITABLE_COLS = [
-  "status","video_type","scheduled_at","r2_url","r2_transcript_url",
-  "video_filename","content_type","file_size_bytes","transcript_id",
-  "planly_media_id","social_copy_hook","social_copy_body","social_copy_cta","hashtags"
+  "status", "video_type", "scheduled_at", "r2_url", "r2_transcript_url",
+  "video_filename", "content_type", "file_size_bytes", "transcript_id",
+  "planly_media_id", "social_copy_hook", "social_copy_body", "social_copy_cta", "hashtags"
 ];
 // Only these may be force-cleared to NULL via `clears`
 const CLEARABLE_COLS = new Set([
-  "scheduled_at","social_copy_hook","social_copy_body","social_copy_cta","hashtags"
+  "scheduled_at", "social_copy_hook", "social_copy_body", "social_copy_cta", "hashtags"
 ]);
 // v1.2.10 ADD: server-side validation enums
 const ALLOWED_STATUS = new Set([
@@ -150,7 +151,7 @@ const TABLES = {
       status: ALLOWED_STATUS,
       video_type: ALLOWED_VIDEO_TYPE,
     },
-    searchable: ["title","hashtags","social_copy_hook","social_copy_body","social_copy_cta"],
+    searchable: ["title", "hashtags", "social_copy_hook", "social_copy_body", "social_copy_cta"],
     defaultSort: "record_modified DESC",
     filterMap: {
       status: "status = ?",
@@ -164,7 +165,7 @@ const TABLES = {
   // Publishing table config
   publishing: {
     table: "Publishing",   // case-insensitive; keep matching your schema
-    uniqueBy: ["video_id","channel_key"],
+    uniqueBy: ["video_id", "channel_key"],
 
     // editable fields for UPSERT (besides timestamps)
     editableCols: [
@@ -187,9 +188,10 @@ const TABLES = {
 
     // status enum per your schema comment
     enumValidators: {
-      status: new Set(["pending","queued","scheduled","posted","failed","skipped"]),
+      status: new Set(["pending", "queued", "scheduling", "scheduled", "posted", "failed", "skipped"]),
       // pending =a waiting transcription and social copy, 
       // queued = transcription and SC complete - ready for worker scheduling - workers search this status
+      // scheduling = set by worker while worker is actively processing and trying to schedule
       // scheduled = processed and scheduled by applicable worker/platform
       // posted = post has actually gone live
       // failed = error state of some kind
@@ -197,7 +199,7 @@ const TABLES = {
       // channel_key validation will be dynamic against Channels table (see handler patch below)
     },
 
-    searchable: ["channel_key","last_error","options_json"],
+    searchable: ["channel_key", "last_error", "options_json"],
     defaultSort: "record_modified DESC",
     filterMap: {
       video_id: "video_id = ?",
@@ -221,7 +223,7 @@ const TABLES = {
     ]),
 
     // Search, sort, filters
-    searchable: ["key","display_name"],
+    searchable: ["key", "display_name"],
     defaultSort: "display_name ASC",
     filterMap: {
       id: "id = ?",
@@ -252,10 +254,10 @@ function ensureEnums(tableCfg, body) {
   for (const [col, allowed] of Object.entries(enums)) {
     const val = body[col];
     if (val !== null && val !== undefined && !allowed.has(val)) {
-      return { ok:false, message: `${col} must be one of: ${[...allowed].join(", ")}` };
+      return { ok: false, message: `${col} must be one of: ${[...allowed].join(", ")}` };
     }
   }
-  return { ok:true };
+  return { ok: true };
 }
 function pickUniqueForBody(tableCfg, body) {
   // If the request body has a non-null id, prefer id as the conflict target.
@@ -283,14 +285,14 @@ function buildQueryParts(tableCfg, url) {
   if (q && tableCfg.searchable?.length) {
     const like = `%${q}%`;
     where.push("(" + tableCfg.searchable.map(c => `${c} LIKE ?`).join(" OR ") + ")");
-    for (let i=0;i<tableCfg.searchable.length;i++) binds.push(like);
+    for (let i = 0; i < tableCfg.searchable.length; i++) binds.push(like);
   }
 
   // sort: ?sort=column,ASC|DESC
   const sortParam = searchParams.get("sort");
   let orderBy = tableCfg.defaultSort || "record_modified DESC";
   if (sortParam) {
-    const [col, dirRaw] = sortParam.split(",").map(s => (s||"").trim());
+    const [col, dirRaw] = sortParam.split(",").map(s => (s || "").trim());
     const dir = (dirRaw || "DESC").toUpperCase();
     const safeDir = (dir === "ASC" || dir === "DESC") ? dir : "DESC";
 
@@ -298,7 +300,7 @@ function buildQueryParts(tableCfg, url) {
       ...(tableCfg.uniqueBy || []),
       ...(tableCfg.editableCols || []),
       ...(tableCfg.searchable || []),
-      "record_created","record_modified","rowid",
+      "record_created", "record_modified", "rowid",
     ]);
     if (col && sortable.has(col)) orderBy = `${col} ${safeDir}`;
   }
@@ -316,7 +318,7 @@ function buildUpsertSQL(tableCfg, body) {
   const now = new Date().toISOString();
 
   // Insert columns include the chosen unique cols, plus editables and timestamps
-  const allInsertCols = [...uniqueCols, ...(editableCols || []), "record_created","record_modified"];
+  const allInsertCols = [...uniqueCols, ...(editableCols || []), "record_created", "record_modified"];
   const payload = {};
   for (const c of allInsertCols) {
     payload[c] = (c === "record_created" || c === "record_modified") ? now : (body?.[c] ?? null);
@@ -363,7 +365,7 @@ async function handlePostUpsert(tableCfg, body, env, logMeta, origin) {
       message: "Validation failed",
       meta: { ...logMeta, ok: false, status_code: 422, reason: "invalid_enum", duration_ms: Date.now() - (logMeta?.t0 ?? Date.now()) }
     });
-    return new Response(JSON.stringify({ success:false, error:"Invalid enum", message: ev.message }), {
+    return new Response(JSON.stringify({ success: false, error: "Invalid enum", message: ev.message }), {
       status: 422, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
     });
   }
@@ -377,12 +379,12 @@ async function handlePostUpsert(tableCfg, body, env, logMeta, origin) {
         message: "Validation failed",
         meta: { ...logMeta, ok: false, status_code: 422, reason: "invalid_channel_key", duration_ms: Date.now() - (logMeta?.t0 ?? Date.now()) }
       });
-      return new Response(JSON.stringify({ success:false, error:"Invalid channel_key", message: check.message }), {
+      return new Response(JSON.stringify({ success: false, error: "Invalid channel_key", message: check.message }), {
         status: 422,
         headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
       });
     }
-  
+
   }
 
   const { sql, binds, clearsCount } = buildUpsertSQL(tableCfg, body);
@@ -424,11 +426,11 @@ async function handlePostUpsert(tableCfg, body, env, logMeta, origin) {
 }
 // ADDED v1.3.3 — dynamic FK-like check for Channels.key
 async function assertChannelKeyExists(env, channel_key) {
-  if (channel_key == null) return { ok:false, message: "channel_key is required" };
+  if (channel_key == null) return { ok: false, message: "channel_key is required" };
   const q = `SELECT 1 FROM Channels WHERE key = ? LIMIT 1`; // table name case-insensitive
   const r = await env.DB.prepare(q).bind(channel_key).all();
   const exists = Array.isArray(r?.results) && r.results.length > 0;
-  return exists ? { ok:true } : { ok:false, message: `Unknown channel_key: ${channel_key}` };
+  return exists ? { ok: true } : { ok: false, message: `Unknown channel_key: ${channel_key}` };
 }
 
 async function handleGetQuery(tableCfg, url, env, logMeta, origin) {
@@ -481,7 +483,7 @@ async function handleBulkDeleteByBody(tableCfg, request, env, logMeta, origin) {
       message: "Bad JSON body",
       meta: { ...logMeta, ok: false, status_code: 400, reason: "json_parse_error", duration_ms: Date.now() - (logMeta?.t0 ?? Date.now()) }
     });
-    return new Response(JSON.stringify({ success:false, error:"Expected JSON body" }), {
+    return new Response(JSON.stringify({ success: false, error: "Expected JSON body" }), {
       status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
     });
   }
@@ -494,7 +496,7 @@ async function handleBulkDeleteByBody(tableCfg, request, env, logMeta, origin) {
       message: "Delete validation failed",
       meta: { ...logMeta, ok: false, status_code: 400, reason: "bulk_delete_keys_missing", duration_ms: Date.now() - (logMeta?.t0 ?? Date.now()) }
     });
-    return new Response(JSON.stringify({ success:false, error:"Provide at least one id or title" }), {
+    return new Response(JSON.stringify({ success: false, error: "Provide at least one id or title" }), {
       status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
     });
   }
@@ -515,7 +517,7 @@ async function handleBulkDeleteByBody(tableCfg, request, env, logMeta, origin) {
     totalDeleted += r.meta?.changes ?? 0;
   }
 
-  return new Response(JSON.stringify({ success:true, deleted: totalDeleted }), {
+  return new Response(JSON.stringify({ success: true, deleted: totalDeleted }), {
     status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
   });
 }
@@ -534,7 +536,7 @@ async function handleDeleteByUnique(tableCfg, url, env, logMeta, origin) {
         meta: { ...logMeta, ok: false, status_code: 400, reason: "missing_unique_key", duration_ms: Date.now() - (logMeta?.t0 ?? Date.now()) }
 
       });
-      return new Response(JSON.stringify({ success:false, error:`Missing unique key '${col}'` }), {
+      return new Response(JSON.stringify({ success: false, error: `Missing unique key '${col}'` }), {
         status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
       });
     }
@@ -548,7 +550,7 @@ async function handleDeleteByUnique(tableCfg, url, env, logMeta, origin) {
       message: "Delete validation failed",
       meta: { ...logMeta, ok: false, status_code: 400, reason: "no_unique_keys", duration_ms: Date.now() - (logMeta?.t0 ?? Date.now()) }
     });
-    return new Response(JSON.stringify({ success:false, error:"No unique keys provided" }), {
+    return new Response(JSON.stringify({ success: false, error: "No unique keys provided" }), {
       status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
     });
   }
@@ -556,263 +558,263 @@ async function handleDeleteByUnique(tableCfg, url, env, logMeta, origin) {
   const sql = `DELETE FROM ${tableCfg.table} WHERE ${where.join(" AND ")}`;
   const res = await env.DB.prepare(sql).bind(...binds).run(); // run() => meta.changes
 
-  return new Response(JSON.stringify({ success:true, deleted: res.meta?.changes ?? 0 }), {
+  return new Response(JSON.stringify({ success: true, deleted: res.meta?.changes ?? 0 }), {
     headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
   });
 }
 
 export default {
-	async fetch(request, env, ctx) {
-		const url = new URL(request.url);
-		const origin = request.headers.get("origin");
-		// Trace seeds for consistent meta
-		const request_id = crypto.randomUUID();
-		const t0 = Date.now();
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    const origin = request.headers.get("origin");
+    // Trace seeds for consistent meta
+    const request_id = crypto.randomUUID();
+    const t0 = Date.now();
 
-  console.log("[db1] incoming", request.method, url.pathname);
+    console.log("[db1] incoming", request.method, url.pathname);
 
-		//Handle CORS preflight requests dynamically
-		if (request.method === "OPTIONS") {
-			return new Response(null, {
-				status: 204,
-				headers: getCorsHeaders(origin),
-			});
-		}
-		
-		// ADDED: Replace legacy internal header check with Authorization: Bearer
-		const isInternal = await checkInternalKey(request, env);
-
-		if (!isInternal) {
-		// 🔒 JWT required for external requests
-		const jwt = request.headers.get("Cf-Access-Jwt-Assertion");
-
-		if (!jwt) {
-      await safeLog(env, {
-        level: "info",
-        service: "request",
-        message: "Request denied",
-        meta: { request_id, route: url.pathname, method: request.method, origin, internal: false, ok: false, status_code: 401, reason: "missing_jwt", duration_ms: Date.now() - t0 }
-    });
-			return new Response("Missing JWT", {
-			status: 401,
-			headers: {
-				"Content-Type": "text/plain",
-				...getCorsHeaders(origin),
-			},
-			});
-		}
-
-
- const accessURL = "https://gr8r.cloudflareaccess.com";
- let keys;
- try {
-   const verifyResponse = await fetch(`${accessURL}/cdn-cgi/access/certs`);
-   const data = await verifyResponse.json();
-   keys = data?.keys;
- } catch (err) {
-   await safeLog(env, {
-     level: "info",
-     service: "request",
-     message: "Request denied",
-     meta: {
-       request_id, route: url.pathname, method: request.method, origin,
-       internal: false, ok: false, status_code: 401, reason: "access_certs_fetch_error",
-       error: err?.message, duration_ms: Date.now() - t0
-     }
-   });
-   return new Response("Unable to validate JWT (certs fetch error)", {
-     status: 401, headers: { "Content-Type": "text/plain", ...getCorsHeaders(origin) }
-   });
- }
-
-
-		if (!keys || keys.length === 0) {
-      await safeLog(env, {
-        level: "info",
-        service: "request",
-        message: "Request denied",
-        meta: { request_id, route: url.pathname, method: request.method, origin, internal: false, ok: false, status_code: 401, reason: "jwt_no_certs", duration_ms: Date.now() - t0 }
-
-      });
-      return new Response("Unable to validate JWT (no certs)", {
-			status: 401,
-			headers: {
-				"Content-Type": "text/plain",
-				...getCorsHeaders(origin),
-			},
-			});
-		}
-
-		let valid = false;
-
-		for (const jwk of keys) {
-			try {
-			const key = await crypto.subtle.importKey(
-				"jwk",
-				jwk,
-				{
-				name: "RSASSA-PKCS1-v1_5",
-				hash: "SHA-256",
-				},
-				false,
-				["verify"]
-			);
-
-			const isValid = await crypto.subtle.verify(
-				"RSASSA-PKCS1-v1_5",
-				key,
-				base64urlToUint8Array(jwt.split(".")[2]),
-				new TextEncoder().encode(jwt.split(".")[0] + "." + jwt.split(".")[1])
-			);
-
-			if (isValid) {
-				valid = true;
-				break;
-			}
-			} catch (err) {
-			// silently ignore bad certs
-			}
-		}
-
-		if (!valid) {
-				await safeLog(env, {
-					level: "info",
-					service: "request",
-					message: "Request denied",
-          meta: { request_id, route: url.pathname, method: request.method, origin, internal: false, ok: false, status_code: 401, reason: "invalid_jwt", duration_ms: Date.now() - t0 }
-				});	
-			return new Response("Invalid JWT", {
-			status: 401,
-			headers: {
-				"Content-Type": "text/plain",
-				...getCorsHeaders(origin),
-			},
-			});
-		}
-		}	
-
-//UPSERT code includes time/date stamping for record_created and/or record_modified
-
-// ADDED v1.3.3 — generic /db1/:table router for GET/POST/DELETE (with error logging + t0 for duration)
-const tableKey = parsePathAsTable(url.pathname);
-if (tableKey) {
-  const tableCfg = TABLES[tableKey];
-  if (!tableCfg) {
-    await safeLog(env, {
-      level: "warn",
-      service: "request",
-      message: "Bad request",
-      meta: { request_id, route: url.pathname, method: request.method, origin, internal: isInternal, ok: false, status_code: 400, reason: "unknown_table", duration_ms: Date.now() - t0 }
-    });
-    return new Response(JSON.stringify({ success:false, error:`Unknown table '${tableKey}'` }), {
-      status: 400,
-      headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
-    });
-  }
-
-  if (request.method === "GET") {
-    try {
-      return await handleGetQuery(
-        tableCfg,
-        url,
-        env,
-        { request_id, route: url.pathname, method: request.method, origin, t0 },
-        origin
-      );
-    } catch (err) {
-      await safeLog(env, {
-        level: "error",
-        service: "db1-fetch",
-        message: `GET ${tableCfg.table} failed`,
-        meta: {
-          request_id, route: url.pathname, method: request.method, origin,
-          ok: false, status_code: 500, error: err?.message, stack: err?.stack,
-
-          duration_ms: Date.now() - t0
-        }
-      });
-
-      return new Response(JSON.stringify({ success:false, error: err?.message }), {
-        status: 500,
-        headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+    //Handle CORS preflight requests dynamically
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: getCorsHeaders(origin),
       });
     }
-  }
 
-  if (request.method === "POST") {
-    try {
-      const body = await request.json();
-      return await handlePostUpsert(
-        tableCfg,
-        body,
-        env,
-        { request_id, route: url.pathname, method: request.method, origin, t0 },
-        origin
-      );
-    } catch (err) {
-      await safeLog(env, {
-        level: "warn",
-        service: "db1-upsert",
-        message: `Upsert failed for ${tableCfg.table}`,
-        meta: {
-          request_id, route: url.pathname, method: request.method, origin,
-          ok: false, status_code: 400, error: err?.message,
-          duration_ms: Date.now() - t0
-        }
-      });
+    // ADDED: Replace legacy internal header check with Authorization: Bearer
+    const isInternal = await checkInternalKey(request, env);
 
-      return new Response(JSON.stringify({ success:false, error:"Upsert Error", message: err?.message }), {
-        status: 400,
-        headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
-      });
-    }
-  }
+    if (!isInternal) {
+      // 🔒 JWT required for external requests
+      const jwt = request.headers.get("Cf-Access-Jwt-Assertion");
 
-  if (request.method === "DELETE") {
-    try {
-      // Try JSON body bulk-delete first (ids/titles/keys)
-      const ct = request.headers.get("Content-Type") || "";
-      if (ct.includes("application/json")) {
-        // Peek body safely; if invalid JSON, helper will return 400
-        return await handleBulkDeleteByBody(
-          tableCfg,
-          request,
-          env,
-          { request_id, route: url.pathname, method: request.method, origin, t0 },
-          origin
-        );
+      if (!jwt) {
+        await safeLog(env, {
+          level: "info",
+          service: "request",
+          message: "Request denied",
+          meta: { request_id, route: url.pathname, method: request.method, origin, internal: false, ok: false, status_code: 401, reason: "missing_jwt", duration_ms: Date.now() - t0 }
+        });
+        return new Response("Missing JWT", {
+          status: 401,
+          headers: {
+            "Content-Type": "text/plain",
+            ...getCorsHeaders(origin),
+          },
+        });
       }
 
-      // Fallback: legacy querystring unique delete (e.g., ?title=...)
-      return await handleDeleteByUnique(
-        tableCfg,
-        url,
-        env,
-        { request_id, route: url.pathname, method: request.method, origin, t0 },
-        origin
-      );
-    } catch (err) {
-      await safeLog(env, {
-        level: "error",
-        service: "db1-delete",
-        message: `DELETE ${tableCfg.table} failed`,
-        meta: {
-          request_id, route: url.pathname, method: request.method, origin,
-          ok: false, status_code: 500, error: err?.message, stack: err?.stack,
-          duration_ms: Date.now() - t0
+
+      const accessURL = "https://gr8r.cloudflareaccess.com";
+      let keys;
+      try {
+        const verifyResponse = await fetch(`${accessURL}/cdn-cgi/access/certs`);
+        const data = await verifyResponse.json();
+        keys = data?.keys;
+      } catch (err) {
+        await safeLog(env, {
+          level: "info",
+          service: "request",
+          message: "Request denied",
+          meta: {
+            request_id, route: url.pathname, method: request.method, origin,
+            internal: false, ok: false, status_code: 401, reason: "access_certs_fetch_error",
+            error: err?.message, duration_ms: Date.now() - t0
+          }
+        });
+        return new Response("Unable to validate JWT (certs fetch error)", {
+          status: 401, headers: { "Content-Type": "text/plain", ...getCorsHeaders(origin) }
+        });
+      }
+
+
+      if (!keys || keys.length === 0) {
+        await safeLog(env, {
+          level: "info",
+          service: "request",
+          message: "Request denied",
+          meta: { request_id, route: url.pathname, method: request.method, origin, internal: false, ok: false, status_code: 401, reason: "jwt_no_certs", duration_ms: Date.now() - t0 }
+
+        });
+        return new Response("Unable to validate JWT (no certs)", {
+          status: 401,
+          headers: {
+            "Content-Type": "text/plain",
+            ...getCorsHeaders(origin),
+          },
+        });
+      }
+
+      let valid = false;
+
+      for (const jwk of keys) {
+        try {
+          const key = await crypto.subtle.importKey(
+            "jwk",
+            jwk,
+            {
+              name: "RSASSA-PKCS1-v1_5",
+              hash: "SHA-256",
+            },
+            false,
+            ["verify"]
+          );
+
+          const isValid = await crypto.subtle.verify(
+            "RSASSA-PKCS1-v1_5",
+            key,
+            base64urlToUint8Array(jwt.split(".")[2]),
+            new TextEncoder().encode(jwt.split(".")[0] + "." + jwt.split(".")[1])
+          );
+
+          if (isValid) {
+            valid = true;
+            break;
+          }
+        } catch (err) {
+          // silently ignore bad certs
         }
-      });
-      return new Response(JSON.stringify({ success:false, error: err?.message }), {
-        status: 500,
-        headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
-      });
+      }
+
+      if (!valid) {
+        await safeLog(env, {
+          level: "info",
+          service: "request",
+          message: "Request denied",
+          meta: { request_id, route: url.pathname, method: request.method, origin, internal: false, ok: false, status_code: 401, reason: "invalid_jwt", duration_ms: Date.now() - t0 }
+        });
+        return new Response("Invalid JWT", {
+          status: 401,
+          headers: {
+            "Content-Type": "text/plain",
+            ...getCorsHeaders(origin),
+          },
+        });
+      }
     }
-  }
 
-  return new Response("Method Not Allowed", { status: 405, headers: getCorsHeaders(origin) });
-}
+    //UPSERT code includes time/date stamping for record_created and/or record_modified
 
-return new Response("Not found", { status: 404, headers: getCorsHeaders(origin) });
+    // ADDED v1.3.3 — generic /db1/:table router for GET/POST/DELETE (with error logging + t0 for duration)
+    const tableKey = parsePathAsTable(url.pathname);
+    if (tableKey) {
+      const tableCfg = TABLES[tableKey];
+      if (!tableCfg) {
+        await safeLog(env, {
+          level: "warn",
+          service: "request",
+          message: "Bad request",
+          meta: { request_id, route: url.pathname, method: request.method, origin, internal: isInternal, ok: false, status_code: 400, reason: "unknown_table", duration_ms: Date.now() - t0 }
+        });
+        return new Response(JSON.stringify({ success: false, error: `Unknown table '${tableKey}'` }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+        });
+      }
 
-	},
+      if (request.method === "GET") {
+        try {
+          return await handleGetQuery(
+            tableCfg,
+            url,
+            env,
+            { request_id, route: url.pathname, method: request.method, origin, t0 },
+            origin
+          );
+        } catch (err) {
+          await safeLog(env, {
+            level: "error",
+            service: "db1-fetch",
+            message: `GET ${tableCfg.table} failed`,
+            meta: {
+              request_id, route: url.pathname, method: request.method, origin,
+              ok: false, status_code: 500, error: err?.message, stack: err?.stack,
+
+              duration_ms: Date.now() - t0
+            }
+          });
+
+          return new Response(JSON.stringify({ success: false, error: err?.message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+          });
+        }
+      }
+
+      if (request.method === "POST") {
+        try {
+          const body = await request.json();
+          return await handlePostUpsert(
+            tableCfg,
+            body,
+            env,
+            { request_id, route: url.pathname, method: request.method, origin, t0 },
+            origin
+          );
+        } catch (err) {
+          await safeLog(env, {
+            level: "warn",
+            service: "db1-upsert",
+            message: `Upsert failed for ${tableCfg.table}`,
+            meta: {
+              request_id, route: url.pathname, method: request.method, origin,
+              ok: false, status_code: 400, error: err?.message,
+              duration_ms: Date.now() - t0
+            }
+          });
+
+          return new Response(JSON.stringify({ success: false, error: "Upsert Error", message: err?.message }), {
+            status: 400,
+            headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+          });
+        }
+      }
+
+      if (request.method === "DELETE") {
+        try {
+          // Try JSON body bulk-delete first (ids/titles/keys)
+          const ct = request.headers.get("Content-Type") || "";
+          if (ct.includes("application/json")) {
+            // Peek body safely; if invalid JSON, helper will return 400
+            return await handleBulkDeleteByBody(
+              tableCfg,
+              request,
+              env,
+              { request_id, route: url.pathname, method: request.method, origin, t0 },
+              origin
+            );
+          }
+
+          // Fallback: legacy querystring unique delete (e.g., ?title=...)
+          return await handleDeleteByUnique(
+            tableCfg,
+            url,
+            env,
+            { request_id, route: url.pathname, method: request.method, origin, t0 },
+            origin
+          );
+        } catch (err) {
+          await safeLog(env, {
+            level: "error",
+            service: "db1-delete",
+            message: `DELETE ${tableCfg.table} failed`,
+            meta: {
+              request_id, route: url.pathname, method: request.method, origin,
+              ok: false, status_code: 500, error: err?.message, stack: err?.stack,
+              duration_ms: Date.now() - t0
+            }
+          });
+          return new Response(JSON.stringify({ success: false, error: err?.message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
+          });
+        }
+      }
+
+      return new Response("Method Not Allowed", { status: 405, headers: getCorsHeaders(origin) });
+    }
+
+    return new Response("Not found", { status: 404, headers: getCorsHeaders(origin) });
+
+  },
 };

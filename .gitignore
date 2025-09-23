@@ -65,4 +65,4 @@ test-fetch.js
 #specific adds
 /pages/dbadmin/env.js
 .env.local
-
+**/test_scratch.txt

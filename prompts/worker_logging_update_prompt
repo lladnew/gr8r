@@ -1,0 +1,66 @@
+Please update this worker to follow my latest logging and secrets standards. That means:
+
+Imports & setup
+
+Add import { getSecret } from "../../../lib/secrets.js";
+
+Add import { createLogger } from "../../../lib/grafana.js";
+
+Define safeLog wrapper with the correct source (worker name).
+
+Logging updates
+
+Replace all env.GRAFANA.fetch(...) calls with safeLog(env, { ... }).
+
+Always include source, service, request_id, route, method, status_code, ok, duration_ms.
+
+Use snake_case in meta.
+
+Levels:
+
+error = unexpected failures.
+
+warn = expected 4xx client errors (validation, missing fields).
+
+info = milestone successes (but limited).
+
+debug = console only, never to Grafana.
+
+Success: log to console only, errors/warns go to Grafana.
+
+Secrets
+
+Replace raw env.SECRET_KEY with await getSecret(env, "SECRET_KEY").
+
+Ensure wrangler.toml has the required Secrets Store bindings for:
+
+REVAI_API_KEY (or whichever this worker needs)
+
+GRAFANACLOUD_GR8R_LOGS_URL, GRAFANACLOUD_GR8R_LOGS_USER, GRAFANACLOUD_GR8R_LOGS_KEY
+
+Request context
+
+Add request_id = crypto.randomUUID() (with fallback).
+
+Add const t0 = Date.now() for timings.
+
+Always include duration_ms in logs.
+
+Responses
+
+For 400s, return JSON with { error, message } and log at warn.
+
+For 500s, return JSON with { error, message } and log at error.
+
+For 404, optional JSON { error: "Not Found" }.
+
+Version header
+
+Bump version with a comment at the top explaining the change, e.g.
+
+// vX.Y.Z gr8r-some-worker
+// CHANGE: migrate to safeLog + Secrets Store; add request_id & timings
+// CHANGE: replace env.GRAFANA proxy with direct Loki logging
+
+
+Please apply these rules surgically, keeping all unrelated logic unchanged.

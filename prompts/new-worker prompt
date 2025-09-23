@@ -1,0 +1,146 @@
+I need to build a new worker.  The function of this worker will be...
+
+It must conform to my growing list of best practice and process see below 
+Imports & setup
+Add import { getSecret } from "../../../lib/secrets.js";
+Add import { createLogger } from "../../../lib/grafana.js";
+Define safeLog wrapper with the correct source (worker name).
+
+Logging updates
+Use safeLog(env, { ... }).
+
+Always include source, service, request_id, route, method, status_code, ok, duration_ms.
+Use snake_case in meta.
+
+Levels:
+error = unexpected failures.
+warn = expected 4xx client errors (validation, missing fields).
+info = milestone successes (but limited).
+debug = console only, never to Grafana.
+Success: log to console only, errors/warns go to Grafana.
+
+Secrets
+Replace raw env.SECRET_KEY with await getSecret(env, "SECRET_KEY").
+Ensure wrangler.toml has the required Secrets Store bindings for:
+INTERNAL_WORKER_KEY (or whichever this worker needs)
+All workers need the following for logging:
+GRAFANACLOUD_GR8R_LOGS_URL, GRAFANACLOUD_GR8R_LOGS_USER, GRAFANACLOUD_GR8R_LOGS_KEY
+
+Request context
+Add request_id = crypto.randomUUID() (with fallback).
+Add const t0 = Date.now() for timings.
+Always include duration_ms in logs.
+
+Responses
+For 400s, return JSON with { error, message } and log at warn.
+For 500s, return JSON with { error, message } and log at error.
+For 404, optional JSON { error: "Not Found" }.
+
+Version header
+Bump version with a comment at the top explaining the change, e.g.
+// vX.Y.Z gr8r-some-worker CHANGE: migrate to safeLog + Secrets Store; add request_id & timings
+
+The imports use these scripts
+secrets.js
+// Simple Secrets Store helper with a fixed 10-minute TTL cache.
+// No purge hook, no env vars — minimal and consistent everywhere.
+
+const SECRET_CACHE = new Map();
+const TTL_MS = 10 * 60 * 1000;
+
+export async function getSecret(env, bindingName) {
+  const now = Date.now();
+
+  // Fresh cache hit?
+  const hit = SECRET_CACHE.get(bindingName);
+  if (hit && hit.expiresAt > now) return hit.value;
+
+  // Secrets Store binding must expose .get()
+  const handle = env[bindingName];
+  if (!handle || typeof handle.get !== "function") {
+    throw new Error(`Secrets Store binding ${bindingName} missing or invalid (.get not found)`);
+  }
+
+  const raw = await handle.get();
+  const val = (raw || "").trim();
+  if (!val) throw new Error(`Secret ${bindingName} resolved empty`);
+
+  SECRET_CACHE.set(bindingName, { value: val, expiresAt: now + TTL_MS });
+  return val;
+}
+
+// Optional (useful for tests only)
+export function _clearSecretCache() { SECRET_CACHE.clear(); }
+
+grafana.js
+// lib/grafana.js  v1.0.0 (no hardcoded source; per-worker setup)
+// Direct Loki push using secrets resolved via lib/secrets.js
+import { getSecret } from "./secrets.js";
+
+/**
+ * Create a logger bound to a specific worker/source label.
+ * Usage in a worker:
+ *   import { createLogger } from "./lib/grafana.js";
+ *   const log = createLogger({ source: "gr8r-db1-worker" });
+ *   await log(env, { service: "db1-upsert", level: "info", message: "Upserted", meta: {...} });
+ */
+export function createLogger({ source }) {
+  const src = (typeof source === "string" && source.trim()) ? source.trim() : "gr8r-unknown";
+
+  return async function logToGrafana(env, entry) {
+    if (!entry || typeof entry !== "object") return;
+
+    const level   = validLevel(entry.level) ? entry.level : "info";
+    const message = typeof entry.message === "string" ? entry.message : "";
+    const service = typeof entry.service === "string" && entry.service.trim()
+      ? entry.service.trim()
+      : "unknown";
+
+    // Labels (strings only). Keep low-cardinality.
+    const labels = { level, source: src, service };
+
+    // Coerce meta primitives; drop objects/arrays/functions.
+    const meta = {};
+    if (entry.meta && typeof entry.meta === "object") {
+      for (const [k, v] of Object.entries(entry.meta)) {
+        if (v == null) { meta[k] = null; continue; }
+        const t = typeof v;
+        if (t === "string" || t === "number" || t === "boolean") {
+          meta[k] = t === "string" && v.length > 8000 ? v.slice(0, 8000) : v;
+        }
+      }
+    }
+
+    const lineObj = { message };
+    if (Object.keys(meta).length) lineObj.meta = meta;
+
+    const timestamp = (Date.now() * 1_000_000).toString(); // ns
+    const payload = JSON.stringify({
+      streams: [{ stream: labels, values: [[timestamp, JSON.stringify(lineObj)]] }]
+    });
+
+    // Resolve secrets (from Secrets Store or plain env)
+    const [url, user, key] = await Promise.all([
+      getSecret(env, "GRAFANACLOUD_GR8R_LOGS_URL"),
+      getSecret(env, "GRAFANACLOUD_GR8R_LOGS_USER"),
+      getSecret(env, "GRAFANACLOUD_GR8R_LOGS_KEY"),
+    ]);
+
+    const auth = "Basic " + btoa(`${user}:${key}`);
+
+    const resp = await fetch(`${url}/loki/api/v1/push`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": auth },
+      body: payload
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      throw new Error(`Loki push failed: ${resp.status} ${text.slice(0, 500)}`);
+    }
+  };
+}
+
+function validLevel(l) {
+  return l === "debug" || l === "info" || l === "warn" || l === "error";
+}
