@@ -5,7 +5,7 @@ on:
   push:
     paths:
       - "workers/orch-pub-worker/**"
-      - ".github/workflows/deploy-gr8r-orch-pub-worker.yml"
+      - ".github/workflows/deploy-orch-pub-worker.yml"
 
 jobs:
   deploy:
