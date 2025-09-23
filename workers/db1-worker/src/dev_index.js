@@ -768,21 +768,22 @@ export default {
         const qMarks = ids.map(() => "?").join(",");
         const sqlJoin = `
         SELECT
-            p.id                AS id,
+            p.id                AS publishing_id,
             p.video_id          AS video_id,
             p.channel_key       AS channel_key,
             p.scheduled_at      AS scheduled_at,
             p.options_json      AS options_json,
             v.title             AS title,
-            v.social_copy_hook  AS social_copy_hook,
-            v.social_copy_body  AS social_copy_body,
-            v.social_copy_cta   AS social_copy_cta,
+            v.social_copy_hook  AS hook,
+            v.social_copy_body  AS body,
+            v.social_copy_cta   AS cta,
             v.hashtags          AS hashtags,
-            v.r2_url            AS r2_url
+            v.r2_url            AS media_url
         FROM Publishing p
         JOIN videos v ON v.id = p.video_id
         WHERE p.id IN (${qMarks})
         ORDER BY p.scheduled_at IS NULL, p.scheduled_at ASC, p.id ASC
+
         `;
         const joined = await env.DB.prepare(sqlJoin).bind(...ids).all();
 
@@ -832,11 +833,11 @@ export default {
         });
         }
 
-        // Basic enum guard for status
-        if (patch.status && !["pending","queued","scheduling","scheduled","posted","failed","skipped"].includes(patch.status)) {
-        return new Response(JSON.stringify({ error: "invalid status" }), {
+       // Basic enum guard for status (aligns with your enum: pending, queued, scheduling, scheduled, posted, error, skipped)
+        if (patch.status && !["pending","queued","scheduling","scheduled","posted","error","skipped"].includes(patch.status)) {
+          return new Response(JSON.stringify({ error: "invalid status" }), {
             status: 422, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
-        });
+          });
         }
 
         const sql = `UPDATE Publishing SET ${sets.join(", ")} WHERE id = ?`;

@@ -296,7 +296,7 @@ export default {
         }
 
         // 3) check DB1 for rows now in 'scheduling'
-        const scheduled = await db1Get(env, "/publishing?status=scheduling&limit=50");
+        const scheduled = await db1Get(env, "/db1/publishing?status=scheduling&limit=50");
 
         return new Response(JSON.stringify({
           ok: true,
