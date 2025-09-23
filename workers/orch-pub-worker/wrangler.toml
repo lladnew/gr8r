@@ -6,9 +6,7 @@ workers_dev = false
 
 routes = [
   { pattern = "api.gr8r.com/orch*",  zone_name = "gr8r.com" },
-  { pattern = "admin.gr8r.com/orch*", zone_name = "gr8r.com" },
-  { pattern = "!api.gr8r.com/cdn-cgi/*", zone_name = "gr8r.com" }
-]
+ ]
 
 [observability]
 enabled = true
