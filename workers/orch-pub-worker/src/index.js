@@ -58,6 +58,32 @@ async function db1Fetch(env, path, body) {
   if (!resp.ok) throw new Error(`DB1 ${path} ${resp.status} ${text.slice(0,300)}`);
   return { data: text ? JSON.parse(text) : null, duration_ms: ms(t0) };
 }
+async function db1Get(env, pathAndQuery) {
+  const base = (env.DB1_BASE_URL || "").replace(/\/$/, "");
+  const key = await getSecret(env, "DB1_INTERNAL_KEY");
+  const resp = await fetch(base + pathAndQuery, {
+    method: "GET",
+    headers: { "Authorization": `Bearer ${key}` }
+  });
+  const txt = await resp.text();
+  if (!resp.ok) throw new Error(`DB1 GET ${resp.status} ${txt.slice(0,300)}`);
+  return txt ? JSON.parse(txt) : null;
+}
+
+async function db1Upsert(env, table, payload) {
+  // Generic POST upsert to /db1/:table using internal key
+  const base = (env.DB1_BASE_URL || "").replace(/\/$/, "");
+  const key = await getSecret(env, "DB1_INTERNAL_KEY");
+  const resp = await fetch(`${base}/${table}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` },
+    body: JSON.stringify(payload || {})
+  });
+  const txt = await resp.text();
+  if (!resp.ok) throw new Error(`DB1 UPSERT ${table} ${resp.status} ${txt.slice(0,300)}`);
+  return txt ? JSON.parse(txt) : null;
+}
+
 
 async function fetchChannelDefaults(env, channel_key) {
   try {
@@ -205,6 +231,89 @@ export default {
         });
       }
     }
+        // POST /__dev/seed-queued
+    if (method === "POST" && route === "/__dev/seed-queued") {
+      const request_id = uuid(); const t0 = Date.now();
+      try {
+        // 1) Ensure channel exists (idempotent upsert)
+        await db1Upsert(env, "channels", {
+          key: "youtube",
+          display_name: "YouTube",
+          json_defaults: JSON.stringify({ privacy_status: "private", auto_shorts: true })
+        });
+
+        // 2) Create a video
+        const title = `Dev Seed ${new Date().toISOString()}`;
+        const v = await db1Upsert(env, "videos", {
+          title,
+          status: "Post Ready",
+          video_type: "Other",
+          r2_url: "https://download.samplelib.com/mp4/sample-5s.mp4",
+          social_copy_hook: "Hook text",
+          social_copy_body: "Body text",
+          social_copy_cta: "Subscribe!",
+          hashtags: "#shorts #dev"
+        });
+        const video_id = v?.video_id;
+
+        // 3) Create publishing (queued)
+        const scheduled_at = new Date(Date.now() + 10*60*1000).toISOString(); // 10 min out
+        await db1Upsert(env, "publishing", {
+          video_id,
+          channel_key: "youtube",
+          status: "queued",
+          scheduled_at,
+          options_json: JSON.stringify({ category_id: 22 })
+        });
+
+        return new Response(JSON.stringify({ ok: true, video_id, scheduled_at }), {
+          status: 200, headers: { "Content-Type": "application/json" }
+        });
+      } catch (e) {
+        await safeLog(env, { level: "error", service: "__dev", message: "seed-queued failed",
+          meta: { error: String(e) }});
+        return new Response(JSON.stringify({ error: "internal", message: String(e) }), {
+          status: 500, headers: { "Content-Type": "application/json" }
+        });
+      }
+    }
+
+    // POST /__dev/claim-and-check
+    if (method === "POST" && route === "/__dev/claim-and-check") {
+      const request_id = uuid(); const t0 = Date.now();
+      try {
+        // 1) claim (queued -> scheduling) via DB1
+        const { data } = await db1Fetch(env, "/publishing/claim", {
+          channel_key: "youtube",
+          limit: Number(env.CLAIM_LIMIT || 5),
+          request_id
+        });
+        const claimed = Array.isArray(data?.rows) ? data.rows : [];
+
+        // 2) enqueue each (so you also test Queues path)
+        for (const r of claimed) {
+          const msg = buildQueueMessage({ request_id, row: r, channel_defaults: null });
+          await enqueueYouTube(env, msg);
+        }
+
+        // 3) check DB1 for rows now in 'scheduling'
+        const scheduled = await db1Get(env, "/publishing?status=scheduling&limit=50");
+
+        return new Response(JSON.stringify({
+          ok: true,
+          claimed_count: claimed.length,
+          scheduling_count: Array.isArray(scheduled) ? scheduled.length : 0,
+          sample: claimed[0] || null
+        }), { status: 200, headers: { "Content-Type": "application/json" }});
+      } catch (e) {
+        await safeLog(env, { level: "error", service: "__dev", message: "claim-and-check failed",
+          meta: { error: String(e) }});
+        return new Response(JSON.stringify({ error: "internal", message: String(e) }), {
+          status: 500, headers: { "Content-Type": "application/json" }
+        });
+      }
+    }
+
 
     // anything else under /__dev
     return new Response(JSON.stringify({ error: "Not Found" }), {
