@@ -9,7 +9,7 @@ on:
 
 jobs:
   deploy:
-    uses: ./.github/workflows/Global Worker deploy.yml
+    uses: ./.github/workflows/_deploy-worker.yml
     with:
       workingDirectory: workers/orch-pub-worker
       workerName: gr8r-orch-pub-worker
