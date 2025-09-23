@@ -1,0 +1,17 @@
+name: Deploy gr8r-orch-pub-worker
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "workers/orch-pub-worker/**"
+      - ".github/workflows/deploy-gr8r-orch-pub-worker.yml"
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/Global Worker deploy.yml
+    with:
+      workingDirectory: workers/orch-pub-worker
+      workerName: gr8r-orch-pub-worker
+    secrets:
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

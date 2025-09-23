@@ -1,27 +1,11 @@
-name = "gr8r-db1-worker"
-main = "src/dev_index.js"
+name = "gr8r-orch-pub-worker"
+main = "src/index.js"
 compatibility_date = "2025-07-25"
 account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
 workers_dev = false
 
-routes = [
-  { pattern = "api.gr8r.com/db1*", zone_name = "gr8r.com" },
-  { pattern = "admin.gr8r.com/db1*", zone_name = "gr8r.com" },
-  { pattern = "!api.gr8r.com/cdn-cgi/*", zone_name = "gr8r.com" }
-]
-
 [observability]
 enabled = true
-
-[[d1_databases]]
-binding = "DB"
-database_name = "DB1"
-database_id = "287776a7-cce2-4171-a7c0-e8a5279dc4b0"
-
-[[secrets_store_secrets]]
-binding = "ADMIN_TOKEN"
-store_id = "23d622f0d3b8499fa021fad6149af8c9"
-secret_name = "ADMIN_TOKEN"
 
 [[secrets_store_secrets]]
 binding = "DB1_INTERNAL_KEY"
@@ -42,3 +26,14 @@ secret_name = "GRAFANACLOUD_GR8R_LOGS_USER"
 binding = "GRAFANACLOUD_GR8R_LOGS_URL"
 store_id = "23d622f0d3b8499fa021fad6149af8c9"
 secret_name = "GRAFANACLOUD_GR8R_LOGS_URL"
+
+# Producer → YouTube queue (must exist)
+[[queues.producers]]
+binding = "PUB_YOUTUBE_Q"
+queue = "pub-youtube-q"
+
+[vars]
+# Point to your db1 route base for when you enable __dev/claim (optional)
+DB1_BASE_URL = "https://api.gr8r.com/db1"
+# Limit for claim if used
+CLAIM_LIMIT = 5
