@@ -11,6 +11,11 @@ routes = [
 [observability]
 enabled = true
 
+[[services]]
+binding = "DB1"
+service = "gr8r-db1-worker"
+entrypoint = "fetch"
+
 [[secrets_store_secrets]]
 binding = "DB1_INTERNAL_KEY"
 store_id = "23d622f0d3b8499fa021fad6149af8c9"
@@ -36,8 +41,3 @@ secret_name = "GRAFANACLOUD_GR8R_LOGS_URL"
 binding = "PUB_YOUTUBE_Q"
 queue = "pub-youtube-q"
 
-[vars]
-# Point to your db1 route base for when you enable __dev/claim (optional)
-DB1_BASE_URL = "https://api.gr8r.com/db1"
-# Limit for claim if used
-CLAIM_LIMIT = 5

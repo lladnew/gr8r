@@ -44,51 +44,49 @@ const WORKER_DEFAULTS = {
   auto_shorts: true,
 };
 
+async function db1Request(env, method, path, body) {
+  const key = await getSecret(env, "DB1_INTERNAL_KEY");
+
+  // Ensure leading slash, but DO NOT force /db1 here—some endpoints are special (e.g. /publishing/claim)
+  const urlPath = path.startsWith("/") ? path : `/${path}`;
+
+  const headers = new Headers({ "Authorization": `Bearer ${key}` });
+  if (method !== "GET") headers.set("Content-Type", "application/json");
+
+  // *** BEST PRACTICE: Service Binding call (private Worker→Worker) ***
+  const req = new Request("https://internal" + urlPath, {
+    method,
+    headers,
+    body: method === "GET" ? undefined : JSON.stringify(body || {}),
+  });
+
+  const resp = await env.DB1.fetch(req);   // <— uses [[services]] binding "DB1"
+  const txt = await resp.text();
+  if (!resp.ok) throw new Error(`DB1 ${method} ${urlPath} ${resp.status} ${txt.slice(0,300)}`);
+  return txt ? JSON.parse(txt) : null;
+}
+
 // ---------- DB1 helper (optional in dev) ----------
 async function db1Fetch(env, path, body) {
   const t0 = Date.now();
-  const url = (env.DB1_BASE_URL || "").replace(/\/$/, "") + path;
-  const key = await getSecret(env, "DB1_INTERNAL_KEY"); // dev friendly if you add plain var
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` },
-    body: JSON.stringify(body || {}),
-  });
-  const text = await resp.text();
-  if (!resp.ok) throw new Error(`DB1 ${path} ${resp.status} ${text.slice(0,300)}`);
-  return { data: text ? JSON.parse(text) : null, duration_ms: ms(t0) };
+  const data = await db1Request(env, "POST", path, body);  // e.g. "/publishing/claim"
+  return { ok: true, data, duration_ms: ms(t0) };
 }
+
 async function db1Get(env, pathAndQuery) {
-  const base = (env.DB1_BASE_URL || "").replace(/\/$/, "");
-  const key = await getSecret(env, "DB1_INTERNAL_KEY");
-  const resp = await fetch(base + pathAndQuery, {
-    method: "GET",
-    headers: { "Authorization": `Bearer ${key}` }
-  });
-  const txt = await resp.text();
-  if (!resp.ok) throw new Error(`DB1 GET ${resp.status} ${txt.slice(0,300)}`);
-  return txt ? JSON.parse(txt) : null;
+  return db1Request(env, "GET", pathAndQuery);  // e.g. "/publishing?status=scheduling&limit=50"
 }
 
 async function db1Upsert(env, table, payload) {
-  // Generic POST upsert to /db1/:table using internal key
-  const base = (env.DB1_BASE_URL || "").replace(/\/$/, "");
-  const key = await getSecret(env, "DB1_INTERNAL_KEY");
-  const resp = await fetch(`${base}/${table}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` },
-    body: JSON.stringify(payload || {})
-  });
-  const txt = await resp.text();
-  if (!resp.ok) throw new Error(`DB1 UPSERT ${table} ${resp.status} ${txt.slice(0,300)}`);
-  return txt ? JSON.parse(txt) : null;
+  // Generic table upsert: always target /db1/:table
+  return db1Request(env, "POST", `/db1/${table}`, payload);  // e.g. /db1/videos
 }
-
 
 async function fetchChannelDefaults(env, channel_key) {
   try {
-    const { data } = await db1Fetch(env, "/channels/get-defaults", { channel_key });
-    return data?.json_defaults || null;
+    const rows = await db1Get(env, `/db1/channels?key=${encodeURIComponent(channel_key)}&limit=1`);
+    const raw = rows?.[0]?.json_defaults || null;
+    try { return raw ? JSON.parse(raw) : null; } catch { return null; }
   } catch {
     return null; // ok in dev
   }
@@ -139,12 +137,13 @@ function makeFakeRow(overrides = {}) {
     r2_key: overrides.r2_key || undefined, // if you want to test R2 later
   };
 }
-
 // ---------- worker entrypoints ----------
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const route = url.pathname;
+    const rawPath = url.pathname;
+    // remove leading "/orch" if present so our dev routes match
+    const route = rawPath.replace(/^\/orch(?=\/|$)/, "");
     const method = request.method;
     const request_id = uuid();
     const t0 = Date.now();
@@ -313,7 +312,6 @@ export default {
         });
       }
     }
-
 
     // anything else under /__dev
     return new Response(JSON.stringify({ error: "Not Found" }), {
