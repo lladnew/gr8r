@@ -4,5 +4,8 @@ compatibility_date = "2024-07-08"
 main = "src/index.js"
 account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
 
+[observability.logs]
+enabled = true
+
 # No secrets declared here — use the Cloudflare dashboard to add:
 # OPENAI_API_KEY

@@ -3,6 +3,9 @@ main = "src/index.js"
 compatibility_date = "2024-05-01"
 account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
 
+[observability.logs]
+enabled = true
+
 [[routes]]
 pattern = "api.gr8r.com/api/subscribe*"
 zone_name = "gr8r.com"

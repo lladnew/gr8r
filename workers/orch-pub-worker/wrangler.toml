@@ -8,7 +8,7 @@ routes = [
   { pattern = "api.gr8r.com/orch*",  zone_name = "gr8r.com" },
  ]
 
-[observability]
+[observability.logs]
 enabled = true
 
 [[services]]

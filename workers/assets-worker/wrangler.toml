@@ -3,6 +3,9 @@ main = "src/index.js"
 compatibility_date = "2025-06-02"
 account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
 
+[observability.logs]
+enabled = true
+
 [[r2_buckets]]
 binding = "ASSETS_BUCKET"
 bucket_name = "assets-gr8r"

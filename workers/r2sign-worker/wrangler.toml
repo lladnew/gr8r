@@ -4,6 +4,9 @@ compatibility_date = "2025-07-11"
 workers_dev = false
 account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
 
+[observability.logs]
+enabled = true
+
 [[routes]]
 pattern = "r2sign.gr8r.com/*"
 zone_name = "gr8r.com"

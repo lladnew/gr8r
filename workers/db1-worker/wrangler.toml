@@ -10,7 +10,7 @@ routes = [
   { pattern = "!api.gr8r.com/cdn-cgi/*", zone_name = "gr8r.com" }
 ]
 
-[observability]
+[observability.logs]
 enabled = true
 
 [[d1_databases]]
