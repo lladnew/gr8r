@@ -1,7 +1,7 @@
 name = "gr8r-r2sign-worker"
 main = "src/index.js"                  # CHANGED: bundle directly from source
 compatibility_date = "2025-07-11"
-node_compat = true                     # ADDED: needed for @aws-sdk on Workers
+compatibility_flags = ["nodejs_compat"]                  # ADDED: needed for @aws-sdk on Workers
 workers_dev = false
 account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
 
