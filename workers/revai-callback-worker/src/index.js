@@ -1,3 +1,4 @@
+// v1.4.6 gr8r-revai-callback-worker  EDIT: tweaked grafana logging success message to include video title
 // v1.4.5 gr8r-revai-callback-worker ADDED: function db1ErrorWriteback() to set videos_status to 'Error' if this worker fails for any reason, removed late video_id check
 // v1.4.4 gr8r-revai-callback-worker ADDED: update to publishing table to mark rows 'queued' and ready for publishing, changed logging to safeLog to keep worker from crashing on log issues
 // REMOVED: text parsing of callback in favor of json only
@@ -565,7 +566,7 @@ export default {
         await safeLog(env, {
           service: "callback",
           level: "info",
-          message: "Transcription and Social Copy complete",
+          message: `Transcript and SC complete: ${title}'`,
           meta: {
             request_id, route, method,
             job_id: id, title,
