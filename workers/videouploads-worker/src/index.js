@@ -1,3 +1,4 @@
+// v1.5.0 gr8r-videouploads-worker EDIT: tweaked success message for logs
 // v1.4.9 gr8r-videouploads-worker CHANGED: removed channel match grafana success log missed previously
 // v1.4.8 gr8r-videouploads-worker CHANGED: updated to safeLog function and tightened logs to revised standards
 // v1.4.7 gr8r-videouploads-worker FIXED: publishing_status issue
@@ -582,7 +583,7 @@ console.log("[DB1 Body] Payload:", JSON.stringify(db1Body, null, 2));
         await safeLog(env, {
             level: "info",
             service: "response",
-            message: "request complete",
+            message: `New video uploaded: ${title}`,
             meta: {
                 ...baseMeta({ request_id, route, method, origin }),
                 status_code: 200,
