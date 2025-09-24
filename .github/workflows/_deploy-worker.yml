@@ -38,6 +38,10 @@ jobs:
       - name: Install repo deps (pinned wrangler)
         run: npm ci
 
+      -  name: Install worker deps (for bundling)
+         working-directory: ${{ inputs.workingDirectory }}
+         run: npm ci
+
       - name: Deploy Worker with Wrangler (repo-pinned via npx)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

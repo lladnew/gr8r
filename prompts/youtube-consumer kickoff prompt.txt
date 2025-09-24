@@ -1,0 +1,39 @@
+Project: gr8r publishing pipeline — continue from prior thread.
+
+Context / current state
+- Workers:
+  - gr8r-db1-worker (routes live, Service Binding target)
+    - Added internal endpoints:
+      • POST /publishing/claim  (queued→scheduling + join Videos)
+      • POST /publishing/update
+      • POST /publishing/list-scheduled
+      • POST /channels/get-defaults
+    - Publishing.status enum: pending | queued | scheduling | scheduled | posted | error | skipped
+  - gr8r-orch-pub-worker (directory: workers/orch-pub-worker)
+    - Uses Service Binding [[services] DB1], Queues producer binding: PUB_YOUTUBE_Q
+    - Dev endpoints: /orch/__dev/ping, /orch/__dev/seed-queued, /orch/__dev/claim-and-check
+    - Atomic state machine: queued → scheduling → scheduled/posted
+  - Queues: enabled; using PUB_YOUTUBE_Q
+- Config/standards:
+  - Always use Service Bindings to talk to DB1.
+  - Logging: safeLog + Grafana; console for info/debug; warn/error to Grafana; snake_case meta.
+  - Secrets via Secrets Store only (no json_defaults for secrets).
+  - Channels.json_defaults holds posting options (not secrets).
+  - Description = hook + body + cta + hashtags; auto-append #Shorts if not present.
+
+What I want next (please do this with SURGICAL placement instructions):
+1) Generate the initial code + wrangler.toml for **gr8r-youtube-consumer_worker** (directory: workers/youtube-consumer-worker), wired to PUB_YOUTUBE_Q as a consumer.
+   - OAuth via Secrets Store: YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, YOUTUBE_REFRESH_TOKEN.
+   - Implement resumable upload (media_url for now), schedule vs immediate, DB1 write-backs, and the poll path to flip scheduled→posted.
+   - Provide exact file paths and “paste-here” blocks. No Canvas. Assume Windows/PowerShell for test commands.
+2) Give me a minimal end-to-end test plan:
+   - seed → claim → queue → consumer upload → DB1 status change.
+   - PowerShell `Invoke-RestMethod` and `wrangler tail` commands.
+3) Brief checklist to productionize (cron enable, retries/DLQ, quotas, error logging).
+
+Constraints
+- Don’t propose broad refactors. Tiny diffs with explicit line/section anchors.
+- Use Service Binding for DB1; no direct HTTP origin URLs.
+- Keep logs quiet on success (console only); errors/warns to Grafana with source/service/request_id/route/method/status_code/ok/duration_ms.
+
+Let’s go step-by-step. Start with the consumer’s directory layout + wrangler.toml, then the `index.js` with exact paste points.
