@@ -12,7 +12,33 @@ enabled = true                         # keep CF Observability enabled
 pattern = "r2sign.gr8r.com/*"
 zone_name = "gr8r.com"
 
-[[services]]
-binding = "GRAFANA_WORKER"
-service = "gr8r-grafana-worker"
+[[secrets_store_secrets]]
+binding = "GRAFANACLOUD_GR8R_LOGS_KEY"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "GRAFANACLOUD_GR8R_LOGS_KEY"
+
+[[secrets_store_secrets]]
+binding = "GRAFANACLOUD_GR8R_LOGS_USER"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "GRAFANACLOUD_GR8R_LOGS_USER"
+
+[[secrets_store_secrets]]
+binding = "GRAFANACLOUD_GR8R_LOGS_URL"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "GRAFANACLOUD_GR8R_LOGS_URL"
+
+[[secrets_store_secrets]]
+binding = "R2_ACCOUNT_ID"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "R2_ACCOUNT_ID"
+
+[[secrets_store_secrets]]
+binding = "R2_ACCESS_KEY_ID"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "R2_ACCESS_KEY_ID"
+
+[[secrets_store_secrets]]
+binding = "R2_SECRET_ACCESS_KEY"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "R2_SECRET_ACCESS_KEY"
 
