@@ -1,3 +1,4 @@
+//gr8r-db1-worker v1.4.0 CHANGE: new routes for orch-pub-worker promote to index.js
 //gr8r-db1-worker v1.3.9 EDIT: added 'scheduling' as a publishing.status option
 //gr8r-db1-worker v1.3.8 CHANGE: switch to safeLog approach and tighten logging by removing success messages
 //gr8r-db1-worker v1.3.7 ADDED: 'Error' to the allowed video_status field
@@ -188,13 +189,13 @@ const TABLES = {
 
     // status enum per your schema comment
     enumValidators: {
-      status: new Set(["pending", "queued", "scheduling", "scheduled", "posted", "failed", "skipped"]),
+      status: new Set(["pending", "queued", "scheduling", "scheduled", "posted", "error", "skipped"]),
       // pending =a waiting transcription and social copy, 
       // queued = transcription and SC complete - ready for worker scheduling - workers search this status
       // scheduling = set by worker while worker is actively processing and trying to schedule
       // scheduled = processed and scheduled by applicable worker/platform
       // posted = post has actually gone live
-      // failed = error state of some kind
+      // error = error state of some kind
       // skipped = used if a schedule created, transcription and SC complete, but post should no longer be scheduled or posted
       // channel_key validation will be dynamic against Channels table (see handler patch below)
     },
@@ -215,7 +216,8 @@ const TABLES = {
     uniqueBy: ["key"],
 
     editableCols: [
-      "display_name"               // key is immutable; upserts use uniqueBy
+      "display_name",               // key is immutable; upserts use uniqueBy
+      "json_defaults"
     ],
 
     clearableCols: new Set([
@@ -223,7 +225,7 @@ const TABLES = {
     ]),
 
     // Search, sort, filters
-    searchable: ["key", "display_name"],
+    searchable: ["key", "display_name", "json_defaults"],
     defaultSort: "display_name ASC",
     filterMap: {
       id: "id = ?",
@@ -693,8 +695,201 @@ export default {
       }
     }
 
-    //UPSERT code includes time/date stamping for record_created and/or record_modified
+    // Handle POST /channels/get-defaults or /db1/channels/get-defaults
+    if (request.method === "POST" &&
+    (url.pathname === "/channels/get-defaults" || url.pathname === "/db1/channels/get-defaults")) {
+    const req_id = crypto.randomUUID(); const tStart = Date.now();
+    try {
+        const body = await request.json().catch(() => ({}));
+        const channel_key = (body?.channel_key || "").trim();
+        if (!channel_key) {
+        await safeLog(env, { level: "warn", service: "db1-chdefaults", message: "Missing channel_key",
+            meta: { request_id: req_id, route: url.pathname, method: request.method, ok: false, status_code: 400, duration_ms: Date.now() - tStart }});
+        return new Response(JSON.stringify({ error: "channel_key required" }), {
+            status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+        });
+        }
+        const r = await env.DB.prepare(`SELECT json_defaults FROM Channels WHERE key = ? LIMIT 1`).bind(channel_key).all();
+        const raw = r?.results?.[0]?.json_defaults || null;
+        let json_defaults = null;
+        try { json_defaults = raw ? JSON.parse(raw) : null; } catch { json_defaults = null; }
+        return new Response(JSON.stringify({ json_defaults }), {
+        status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+        });
+    } catch (err) {
+        await safeLog(env, { level: "error", service: "db1-chdefaults", message: "Defaults fetch failed",
+        meta: { request_id: req_id, route: url.pathname, method: request.method, ok: false, status_code: 500, error: err?.message, duration_ms: Date.now() - tStart }});
+        return new Response(JSON.stringify({ error: "Server error" }), {
+        status: 500, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+        });
+    }
+    }
+    // Handle POST /publishing/claim or /db1/publishing/claim
+    if (request.method === "POST" &&
+    (url.pathname === "/publishing/claim" || url.pathname === "/db1/publishing/claim")) {
+    const req_id = crypto.randomUUID(); const tStart = Date.now();
+    try {
+        const body = await request.json().catch(() => ({}));
+        const channel_key = (body?.channel_key || "").trim();
+        const limit = Math.min(Math.max(parseInt(body?.limit || "5", 10), 1), 50);
 
+        if (!channel_key) {
+        await safeLog(env, { level: "warn", service: "db1-claim", message: "Missing channel_key",
+            meta: { request_id: req_id, route: url.pathname, method: request.method, ok: false, status_code: 400, duration_ms: Date.now() - tStart }});
+        return new Response(JSON.stringify({ error: "channel_key required" }), {
+            status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+        });
+        }
+
+        // 1) Flip queued → scheduling for up to :limit rows (atomic)
+        const now = new Date().toISOString();
+        const sqlUpdate = `
+        WITH cte AS (
+            SELECT id FROM Publishing
+            WHERE status = 'queued' AND channel_key = ?
+            ORDER BY COALESCE(scheduled_at, '9999-12-31T00:00:00Z') ASC, id
+            LIMIT ?
+        )
+        UPDATE Publishing
+        SET status = 'scheduling', record_modified = ?
+        WHERE id IN (SELECT id FROM cte)
+        RETURNING id, video_id, channel_key, scheduled_at, options_json
+        `;
+        const u = await env.DB.prepare(sqlUpdate).bind(channel_key, limit, now).all();
+        const claimed = u?.results || [];
+        if (!claimed.length) {
+        return new Response(JSON.stringify({ rows: [] }), {
+            status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+        });
+        }
+
+        // 2) Join Videos to pull content fields needed by the worker
+        const ids = claimed.map(r => r.id);
+        const qMarks = ids.map(() => "?").join(",");
+        const sqlJoin = `
+        SELECT
+            p.id                AS publishing_id,
+            p.video_id          AS video_id,
+            p.channel_key       AS channel_key,
+            p.scheduled_at      AS scheduled_at,
+            p.options_json      AS options_json,
+            v.title             AS title,
+            v.social_copy_hook  AS hook,
+            v.social_copy_body  AS body,
+            v.social_copy_cta   AS cta,
+            v.hashtags          AS hashtags,
+            v.r2_url            AS media_url
+        FROM Publishing p
+        JOIN videos v ON v.id = p.video_id
+        WHERE p.id IN (${qMarks})
+        ORDER BY p.scheduled_at IS NULL, p.scheduled_at ASC, p.id ASC
+
+        `;
+        const joined = await env.DB.prepare(sqlJoin).bind(...ids).all();
+
+        await safeLog(env, { level: "info", service: "db1-claim", message: "claimed",
+        meta: { request_id: req_id, channel_key, count: joined?.results?.length || 0, status_code: 200, ok: true, duration_ms: Date.now() - tStart }});
+
+        return new Response(JSON.stringify({ rows: joined?.results || [] }), {
+        status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+        });
+    } catch (err) {
+        await safeLog(env, { level: "error", service: "db1-claim", message: "claim failed",
+        meta: { request_id: req_id, route: url.pathname, method: request.method, ok: false, status_code: 500, error: err?.message, duration_ms: Date.now() - tStart }});
+        return new Response(JSON.stringify({ error: "Server error" }), {
+        status: 500, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+        });
+    }
+    } 
+    // Handle POST /publishing/update or /db1/publishing/update
+    if (request.method === "POST" &&
+    (url.pathname === "/publishing/update" || url.pathname === "/db1/publishing/update")) {
+    const req_id = crypto.randomUUID(); const tStart = Date.now();
+    try {
+        const body = await request.json().catch(() => ({}));
+        const publishing_id = body?.publishing_id ?? body?.id;
+        const patch = body?.patch || {};
+        if (!publishing_id || typeof patch !== "object") {
+        await safeLog(env, { level: "warn", service: "db1-patch", message: "Bad input",
+            meta: { request_id: req_id, ok: false, status_code: 400, duration_ms: Date.now() - tStart }});
+        return new Response(JSON.stringify({ error: "publishing_id and patch required" }), {
+            status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+        });
+        }
+
+        // Allowed columns to patch
+        const allowed = new Set(["status", "platform_media_id", "last_error", "posted_at", "scheduled_at", "options_json"]);
+        const sets = [];
+        const binds = [];
+        for (const [k, v] of Object.entries(patch)) {
+        if (!allowed.has(k)) continue;
+        sets.push(`${k} = ?`);
+        binds.push(v);
+        }
+        sets.push(`record_modified = ?`); binds.push(new Date().toISOString());
+        if (!sets.length) {
+        return new Response(JSON.stringify({ success: true, updated: 0 }), {
+            status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+        });
+        }
+
+       // Basic enum guard for status (aligns with your enum: pending, queued, scheduling, scheduled, posted, error, skipped)
+        if (patch.status && !["pending","queued","scheduling","scheduled","posted","error","skipped"].includes(patch.status)) {
+          return new Response(JSON.stringify({ error: "invalid status" }), {
+            status: 422, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+          });
+        }
+
+        const sql = `UPDATE Publishing SET ${sets.join(", ")} WHERE id = ?`;
+        const r = await env.DB.prepare(sql).bind(...binds, publishing_id).run();
+
+        return new Response(JSON.stringify({ success: true, updated: r.meta?.changes ?? 0 }), {
+        status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+        });
+    } catch (err) {
+        await safeLog(env, { level: "error", service: "db1-patch", message: "update failed",
+        meta: { request_id: req_id, route: url.pathname, method: request.method, ok: false, status_code: 500, error: err?.message, duration_ms: Date.now() - tStart }});
+        return new Response(JSON.stringify({ error: "Server error" }), {
+        status: 500, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+        });
+    }
+    }
+    // Handle POST /publishing/list-scheduled or /db1/publishing/list-scheduled
+    if (request.method === "POST" &&
+    (url.pathname === "/publishing/list-scheduled" || url.pathname === "/db1/publishing/list-scheduled")) {
+    const req_id = crypto.randomUUID(); const tStart = Date.now();
+    try {
+        const body = await request.json().catch(() => ({}));
+        const channel_key = (body?.channel_key || "").trim();
+        const limit = Math.min(Math.max(parseInt(body?.limit || "50", 10), 1), 200);
+
+        if (!channel_key) {
+        return new Response(JSON.stringify({ error: "channel_key required" }), {
+            status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+        });
+        }
+
+        const sql = `
+        SELECT id AS publishing_id, platform_media_id
+        FROM Publishing
+        WHERE status = 'scheduled' AND channel_key = ? AND platform_media_id IS NOT NULL
+        ORDER BY scheduled_at ASC, id ASC
+        LIMIT ?
+        `;
+        const r = await env.DB.prepare(sql).bind(channel_key, limit).all();
+        return new Response(JSON.stringify({ rows: r?.results || [] }), {
+        status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+        });
+    } catch (err) {
+        await safeLog(env, { level: "error", service: "db1-list", message: "list scheduled failed",
+        meta: { request_id: req_id, route: url.pathname, method: request.method, ok: false, status_code: 500, error: err?.message, duration_ms: Date.now() - tStart }});
+        return new Response(JSON.stringify({ error: "Server error" }), {
+        status: 500, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+        });
+    }
+    }
+
+    //UPSERT code includes time/date stamping for record_created and/or record_modified
     // ADDED v1.3.3 — generic /db1/:table router for GET/POST/DELETE (with error logging + t0 for duration)
     const tableKey = parsePathAsTable(url.pathname);
     if (tableKey) {
