@@ -2,7 +2,26 @@
 // ADD: YouTube Queues consumer + manual poll endpoint + DB1 write-backs
 // Standards: Service Binding (DB1), safeLog to Grafana on warn/error, console on success
 
-import { safeLog } from "../../../lib/grafana.js";
+import { getSecret } from "../../../lib/secrets.js";
+import { createLogger } from "../../../lib/grafana.js";
+
+// ---------- logging (matches your policy) ----------
+const _logger = createLogger({ source: "gr8r-youtube-worker" });
+async function safeLog(env, entry) {
+  try {
+    const level = entry?.level || "info";
+    if (level === "debug" || level === "info") {
+      console[level === "debug" ? "debug" : "log"](
+        `[${entry?.service || "youtube"}] ${entry?.message || ""}`,
+        entry?.meta || {}
+      );
+      return;
+    }
+    await _logger(env, entry); // warn/error → Grafana
+  } catch (e) {
+    console.log("LOG_FAIL", entry?.service || "unknown", e?.stack || e?.message || e);
+  }
+}
 
 const SOURCE  = "gr8r-youtube-worker";
 const SERVICE = "youtube-worker";
@@ -32,35 +51,41 @@ function buildDescription({ hook, body, cta, hashtags, template, append_shorts =
 
 
 async function logError(env, message, meta = {}) {
-  try {
-    await safeLog(env, "error", message, {
-      source: SOURCE,
-      service: SERVICE,
-      ...meta,
-    });
-  } catch {
-    // never throw from logging
-  }
+  await safeLog(env, {
+    level: "error",
+    service: SERVICE,
+    message,
+    meta: { ...meta },
+  });
 }
 
 async function logWarn(env, message, meta = {}) {
-  try {
-    await safeLog(env, "warn", message, {
-      source: SOURCE,
-      service: SERVICE,
-      ...meta,
-    });
-  } catch {}
+  await safeLog(env, {
+    level: "warn",
+    service: SERVICE,
+    message,
+    meta: { ...meta },
+  });
 }
 
 // ----- OAuth (Refresh → Access Token) -----
 async function getAccessToken(env) {
   const t0 = Date.now();
+
+  // Prefer Secrets Store via getSecret(); fall back to env bindings if needed
+  const client_id = (await getSecret(env, "YOUTUBE_CLIENT_ID"))     || env.YOUTUBE_CLIENT_ID;
+  const client_secret = (await getSecret(env, "YOUTUBE_CLIENT_SECRET")) || env.YOUTUBE_CLIENT_SECRET;
+  const refresh_token = (await getSecret(env, "YOUTUBE_REFRESH_TOKEN")) || env.YOUTUBE_REFRESH_TOKEN;
+
+  if (!client_id || !client_secret || !refresh_token) {
+    throw new Error("missing_youtube_oauth_secrets(client_id|client_secret|refresh_token)");
+  }
+
   const body = new URLSearchParams({
     grant_type: "refresh_token",
-    client_id: env.YOUTUBE_CLIENT_ID,
-    client_secret: env.YOUTUBE_CLIENT_SECRET,
-    refresh_token: env.YOUTUBE_REFRESH_TOKEN,
+    client_id,
+    client_secret,
+    refresh_token,
   });
 
   const res = await fetch("https://oauth2.googleapis.com/token", {
@@ -73,10 +98,10 @@ async function getAccessToken(env) {
     const txt = await res.text().catch(() => "");
     throw new Error(`oauth_refresh_failed_${res.status}:${txt}`);
   }
-  const json = await res.json();
-  // json: { access_token, expires_in, token_type, scope }
+  const json = await res.json(); // { access_token, expires_in, token_type, scope }
   return { token: json.access_token, duration_ms: Date.now() - t0 };
 }
+
 
 // ----- YouTube Resumable Upload -----
 async function createResumableSession(token, metadata, contentType, contentLength) {
