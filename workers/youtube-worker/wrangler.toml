@@ -1,6 +1,7 @@
 name = "gr8r-youtube-worker"
 main = "src/index.js"
 compatibility_date = "2025-09-24"
+account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
 
 [[queues.consumers]]
 queue = "PUB_YOUTUBE_Q"
