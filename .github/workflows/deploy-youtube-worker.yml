@@ -1,0 +1,17 @@
+name: Deploy gr8r-youtube-worker
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "workers/youtube-worker/**"
+      - ".github/workflows/deploy-youtube-worker.yml"
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_deploy-worker.yml
+    with:
+      workingDirectory: workers/youtube-worker
+      workerName: gr8r-youtube-worker
+    secrets:
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
