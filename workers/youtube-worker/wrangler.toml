@@ -18,6 +18,21 @@ store_id    = "23d622f0d3b8499fa021fad6149af8c9"
 secret_name = "DB1_INTERNAL_KEY"
 
 [[secrets_store_secrets]]
+binding = "GRAFANACLOUD_GR8R_LOGS_KEY"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "GRAFANACLOUD_GR8R_LOGS_KEY"
+
+[[secrets_store_secrets]]
+binding = "GRAFANACLOUD_GR8R_LOGS_USER"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "GRAFANACLOUD_GR8R_LOGS_USER"
+
+[[secrets_store_secrets]]
+binding = "GRAFANACLOUD_GR8R_LOGS_URL"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "GRAFANACLOUD_GR8R_LOGS_URL"
+
+[[secrets_store_secrets]]
 binding     = "YOUTUBE_CLIENT_ID"
 store_id    = "23d622f0d3b8499fa021fad6149af8c9"
 secret_name = "YOUTUBE_CLIENT_ID"
