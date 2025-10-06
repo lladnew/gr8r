@@ -4,7 +4,8 @@ compatibility_date = "2025-09-24"
 account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
 
 [[queues.consumers]]
-queue = "PUB_YOUTUBE_Q"
+binding 
+queue = "pub-youtube-q"
 max_batch_size = 5
 max_batch_timeout = 5
 
