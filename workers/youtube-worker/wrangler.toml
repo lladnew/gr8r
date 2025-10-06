@@ -1,0 +1,36 @@
+name = "gr8r-youtube-worker"
+main = "src/index.js"
+compatibility_date = "2025-09-24"
+
+[[queues.consumers]]
+queue = "PUB_YOUTUBE_Q"
+max_batch_size = 5
+max_batch_timeout = 5
+
+[[services]]
+binding = "DB1"
+service  = "gr8r-db1-worker"
+
+[[secrets_store_secrets]]
+binding     = "DB1_INTERNAL_KEY"
+store_id    = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "DB1_INTERNAL_KEY"
+
+[[secrets_store_secrets]]
+binding     = "YOUTUBE_CLIENT_ID"
+store_id    = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "YOUTUBE_CLIENT_ID"
+
+[[secrets_store_secrets]]
+binding     = "YOUTUBE_CLIENT_SECRET"
+store_id    = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "YOUTUBE_CLIENT_SECRET"
+
+[[secrets_store_secrets]]
+binding     = "YOUTUBE_REFRESH_TOKEN"
+store_id    = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "YOUTUBE_REFRESH_TOKEN"
+
+# --- Cron (off for now) ---
+# [triggers]
+# crons = ["*/10 * * * *"]
