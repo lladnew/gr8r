@@ -23,6 +23,13 @@ async function safeLog(env, entry) {
   }
 }
 
+// ----- internal auth helper (mirror orch) -----
+async function getDb1Key(env) {
+  const key = await getSecret(env, "DB1_INTERNAL_KEY");
+  if (!key) throw new Error("missing_DB1_INTERNAL_KEY");
+  return key;
+}
+
 const SOURCE  = "gr8r-youtube-worker";
 const SERVICE = "youtube-worker";
 
@@ -177,7 +184,7 @@ async function db1Update(env, payload, reqMeta) {
       headers: {
         "Content-Type": "application/json",
         "x-request-id": reqMeta?.request_id || shortId(),
-        "Authorization": `Bearer ${env.DB1_INTERNAL_KEY}`,
+        "Authorization": `Bearer ${await getDb1Key(env)}`,
       },
     body: JSON.stringify(payload),
   });
@@ -194,7 +201,7 @@ async function db1ListScheduled(env, payload, reqMeta) {
       headers: {
         "Content-Type": "application/json",
         "x-request-id": reqMeta?.request_id || shortId(),
-        "Authorization": `Bearer ${env.DB1_INTERNAL_KEY}`,
+        "Authorization": `Bearer ${await getDb1Key(env)}`,
       },
     body: JSON.stringify(payload || { platform: "youtube", limit: 50 }),
   });
@@ -212,7 +219,7 @@ async function db1GetChannelDefaults(env, payload, reqMeta) {
     headers: {
       "Content-Type": "application/json",
       "x-request-id": reqMeta?.request_id || shortId(),
-      "Authorization": `Bearer ${env.DB1_INTERNAL_KEY}`,
+      "Authorization": `Bearer ${await getDb1Key(env)}`,
     },
     // Expecting DB1 route to accept { key: "youtube" }
     body: JSON.stringify(payload || { key: "youtube" }),
