@@ -1,3 +1,4 @@
+// gr8r-youtube-worker v1.0.1 ADDED: check for existing platform_media_id and guard to stop past schedules and existing posts via matching media_ID
 // gr8r-youtube-consumer-worker v1.0.0 live version with cron
 // gr8r-youtube-consumer-worker v0.1.0
 // ADD: YouTube Queues consumer + manual poll endpoint + DB1 write-backs
@@ -178,16 +179,17 @@ async function videosGetStatuses(token, ids) {
   return out;
 }
 
-// ----- DB1 helpers (Service Binding) -----
-async function db1Update(env, payload, reqMeta) {
+// DB1 expects { publishing_id, patch: { ...allowed columns... } }
+async function db1Update(env, publishing_id, patch, reqMeta) {
+  const body = { publishing_id, patch };
   const res = await env.DB1.fetch("http://db1/publishing/update", {
     method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-request-id": reqMeta?.request_id || shortId(),
-        "Authorization": `Bearer ${await getDb1Key(env)}`,
-      },
-    body: JSON.stringify(payload),
+    headers: {
+      "Content-Type": "application/json",
+      "x-request-id": reqMeta?.request_id || shortId(),
+      "Authorization": `Bearer ${await getDb1Key(env)}`,
+    },
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
@@ -195,6 +197,7 @@ async function db1Update(env, payload, reqMeta) {
   }
   return res.json().catch(() => ({}));
 }
+
 
 async function db1ListScheduled(env, payload, reqMeta) {
   const res = await env.DB1.fetch("http://db1/publishing/list-scheduled", {
@@ -260,10 +263,11 @@ async function processMessage(env, msg, reqId) {
     hashtags,
     tags,
     category_id,
-    privacy_status,       // "public" | "unlisted" | "private" (immediate publish uses public/unlisted)
-    publish_at,           // ISO string → future = scheduled
-    content_length,       // optional; if missing, we'll try HEAD
-    content_type          // optional; fallback via HEAD
+    privacy_status,       // "public" | "unlisted" | "private"
+    publish_at,           // legacy; ISO string
+    content_length,       // optional
+    content_type,         // optional
+    platform_media_id: existingYtId, // NEW: carry-through from queue
   } = payload;
 
   // Per-post overrides (payload.options_json may be string or object)
@@ -287,6 +291,30 @@ async function processMessage(env, msg, reqId) {
     if (!isFuture) {
       throw new Error("require_future_schedule: missing or past scheduled_at");
     }
+  }
+
+  // If the DB row already has a YouTube ID, don't re-upload.
+  if (existingYtId) {
+    const scheduled = scheduledAt && new Date(scheduledAt) > new Date();
+    await logWarn(env, "skip_upload_existing_platform_id", {
+      request_id: reqId,
+      publishing_id,
+      youtube_video_id: existingYtId,
+      scheduledAt,
+    });
+
+    // Keep DB coherent
+    await db1Update(
+      env,
+      publishing_id,
+      {
+        status: scheduled ? "scheduled" : "posted",
+        posted_at: scheduled ? null : nowIso(),
+      },
+      { request_id: reqId }
+    );
+
+    return { ok: true, skipped: true, reason: "existing_platform_id" };
   }
 
   // channel key (Channels.key); default to 'youtube' unless explicitly provided
@@ -374,14 +402,18 @@ async function processMessage(env, msg, reqId) {
   if (!ytId) throw new Error("youtube_missing_video_id");
 
   // write back to DB1
-  const updatePayload = {
+  await db1Update(
+    env,
     publishing_id,
-    youtube_video_id: ytId,
-    youtube_url: `https://youtu.be/${ytId}`,
-    status: scheduled ? "scheduled" : "posted",
-    posted_at: scheduled ? null : nowIso(),
-  };
-  await db1Update(env, updatePayload, { request_id: reqId });
+    {
+      platform_media_id: ytId,
+      platform_url: `https://youtu.be/${ytId}`,
+      status: scheduled ? "scheduled" : "posted",
+      posted_at: scheduled ? null : nowIso(),
+    },
+    { request_id: reqId }
+  );
+
 
   console.log(`[${SERVICE}] upload ok publishing_id=${publishing_id} yt=${ytId} scheduled=${scheduled}`);
   return { ok: true, ytId, scheduled, duration_ms: Date.now() - t0 };
@@ -412,7 +444,7 @@ async function pollScheduled(env, reqId) {
     // When published, YouTube status.privacyStatus becomes "public" (or "unlisted")
     if (st && (st.privacyStatus === "public" || st.privacyStatus === "unlisted")) {
       const publishing_id = idMap[ytId].publishing_id;
-      await db1Update(env, { publishing_id, status: "posted", posted_at: nowIso() }, { request_id: reqId });
+      await db1Update(env, publishing_id, { status: "posted", posted_at: nowIso() }, { request_id: reqId });
       updated++;
     }
   }
@@ -431,16 +463,34 @@ export default {
         // explicit ack on success
         msg.ack();
       } catch (err) {
+        const errorText = String(err?.message || err);
+
+        // Log to Grafana (keeps your existing fields)
         await logError(env, "youtube_consumer_failed", {
           request_id: reqId,
           route: "queue/PUB_YOUTUBE_Q",
           method: "queue",
-          error: String(err?.message || err),
+          error: errorText,
           ok: false,
           status_code: 500,
           duration_ms: Date.now() - t0,
         });
-        // hand back to queue
+
+        // ---- policy / non-retryable errors: ACK (do NOT retry) ----
+        // - require_future_schedule: we’re intentionally blocking past/blank schedules
+        // - skip_upload_existing_platform_id: processMessage() shouldn’t throw this,
+        //   but if it ever does, we still want to ACK.
+        if (
+          errorText.startsWith("require_future_schedule") ||
+          errorText.startsWith("skip_upload_existing_platform_id")
+        ) {
+          msg.ack();
+          return;
+        }
+
+        // ---- transient/retryable errors: RETRY ----
+        // Network hiccups, token refresh blips, resumable PUT errors, etc.
+        // (Keep this broad for now; you can refine with more specific matches later.)
         msg.retry();
       }
     }
