@@ -1,3 +1,4 @@
+//gr8r-db1-worker v1.4.1 CHANGE: updated Select statement to return existing platform_media_id and media_url - line 780
 //gr8r-db1-worker v1.4.1 CHANGE: updates for orch-pub-worker and added platform_url column dev_index.js
 //gr8r-db1-worker v1.4.0 CHANGE: new routes for orch-pub-worker promote to index.js
 //gr8r-db1-worker v1.3.9 EDIT: added 'scheduling' as a publishing.status option
@@ -776,17 +777,18 @@ export default {
             p.channel_key       AS channel_key,
             p.scheduled_at      AS scheduled_at,
             p.options_json      AS options_json,
+            p.platform_media_id AS platform_media_id,   -- <-- add
+            p.platform_url      AS platform_url,        -- <-- add (if you created the column)
             v.title             AS title,
             v.social_copy_hook  AS hook,
             v.social_copy_body  AS body,
             v.social_copy_cta   AS cta,
             v.hashtags          AS hashtags,
             v.r2_url            AS media_url
-        FROM Publishing p
-        JOIN videos v ON v.id = p.video_id
-        WHERE p.id IN (${qMarks})
-        ORDER BY p.scheduled_at IS NULL, p.scheduled_at ASC, p.id ASC
-
+            FROM Publishing p
+            JOIN videos v ON v.id = p.video_id
+            WHERE p.id IN (${qMarks})
+            ORDER BY p.scheduled_at IS NULL, p.scheduled_at ASC, p.id ASC
         `;
         const joined = await env.DB.prepare(sqlJoin).bind(...ids).all();
 
