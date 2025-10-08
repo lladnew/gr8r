@@ -1,3 +1,4 @@
+// v1.1.1 gr8r-orch-pub-worker ADDED:checks for already existing platform_media_id and url
 // v1.1.0 gr8r-orch-pub-worker ADDED:prod with public surface maybe...?... added cron trigger every 5min
 // v0.1.0 gr8r-orch-pub-worker ADDED: dev-first placeholder with __dev routes
 // - No public surface (403), but exposes __dev helpers for local testing
@@ -107,6 +108,8 @@ function buildQueueMessage({ request_id, row, channel_defaults }) {
     video_id: row.video_id,
     channel_key: row.channel_key,
     scheduled_at: row.scheduled_at,
+    platform_media_id: row.platform_media_id || null,
+    platform_url: row.platform_url || null,
     r2: row.r2_key ? { key: row.r2_key } : undefined,
     media_url: row.media_url,
     title: row.title,
