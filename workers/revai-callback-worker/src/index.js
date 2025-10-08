@@ -103,7 +103,7 @@ export default {
       await safeLog(env, {
         service: "callback",
         level: "debug",
-        message: "rev.ai job completion received",
+        message: `rev.ai job completed: ${id}`,
         meta: { request_id, route, method, ok: true, job_id: id, status }
       });
 
@@ -566,7 +566,7 @@ export default {
         await safeLog(env, {
           service: "callback",
           level: "info",
-          message: `Transcript and SC complete: ${title}'`,
+          message: `Transcript and SC complete: ${title}`,
           meta: {
             request_id, route, method,
             job_id: id, title,
