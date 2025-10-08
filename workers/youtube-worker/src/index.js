@@ -1,3 +1,4 @@
+// gr8r-youtube-consumer-worker v1.0.0 live version with cron
 // gr8r-youtube-consumer-worker v0.1.0
 // ADD: YouTube Queues consumer + manual poll endpoint + DB1 write-backs
 // Standards: Service Binding (DB1), safeLog to Grafana on warn/error, console on success
@@ -198,19 +199,22 @@ async function db1Update(env, payload, reqMeta) {
 async function db1ListScheduled(env, payload, reqMeta) {
   const res = await env.DB1.fetch("http://db1/publishing/list-scheduled", {
     method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-request-id": reqMeta?.request_id || shortId(),
-        "Authorization": `Bearer ${await getDb1Key(env)}`,
-      },
-    body: JSON.stringify(payload || { platform: "youtube", limit: 50 }),
+    headers: {
+      "Content-Type": "application/json",
+      "x-request-id": reqMeta?.request_id || shortId(),
+      "Authorization": `Bearer ${await getDb1Key(env)}`,
+    },
+    // DB1 expects { channel_key, limit }
+    body: JSON.stringify(payload || { channel_key: "youtube", limit: 50 }),
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(`db1_list_scheduled_failed_${res.status}:${txt}`);
   }
+  // returns { rows: [{ publishing_id, platform_media_id }, ...] }
   return res.json();
 }
+
 
 // ----- DB1: get channel defaults by channel key (e.g., 'youtube') -----
 async function db1GetChannelDefaults(env, payload, reqMeta) {
@@ -221,15 +225,16 @@ async function db1GetChannelDefaults(env, payload, reqMeta) {
       "x-request-id": reqMeta?.request_id || shortId(),
       "Authorization": `Bearer ${await getDb1Key(env)}`,
     },
-    // Expecting DB1 route to accept { key: "youtube" }
-    body: JSON.stringify(payload || { key: "youtube" }),
+    // DB1 expects { channel_key: "youtube" }
+    body: JSON.stringify(payload || { channel_key: "youtube" }),
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(`db1_get_defaults_failed_${res.status}:${txt}`);
   }
-  return res.json(); // expect { json_defaults: {...} }
+  return res.json(); // -> { json_defaults }
 }
+
 
 
 // ----- Main processing for a single message -----
@@ -261,27 +266,53 @@ async function processMessage(env, msg, reqId) {
     content_type          // optional; fallback via HEAD
   } = payload;
 
+  // Per-post overrides (payload.options_json may be string or object)
+  let perPost = {};
+  try {
+    perPost = typeof payload.options_json === "string"
+      ? JSON.parse(payload.options_json)
+      : (payload.options_json && typeof payload.options_json === "object" ? payload.options_json : {});
+  } catch { perPost = {}; }
+
+  // Use either publish_at (legacy name) or scheduled_at (what orch sends)
+  const scheduledAt =
+    perPost.publish_at ??
+    payload.publish_at ??
+    payload.scheduled_at ??
+    null;
+
+  // Guard: require a future schedule (toggle via env if you want)
+  if (env.REQUIRE_FUTURE_SCHEDULE === "1") {
+    const isFuture = scheduledAt && new Date(scheduledAt) > new Date();
+    if (!isFuture) {
+      throw new Error("require_future_schedule: missing or past scheduled_at");
+    }
+  }
+
   // channel key (Channels.key); default to 'youtube' unless explicitly provided
-  const channel_key = payload.channel_key || "youtube";
+   const channel_key = payload.channel_key || "youtube";
 
   // Fetch defaults from DB1 and merge
-  const defaultsResp = await db1GetChannelDefaults(env, { key: channel_key }, { request_id: reqId })
+  const defaultsResp = await db1GetChannelDefaults(env, { channel_key }, { request_id: reqId })
     .catch(() => null);
+
   const defaults = defaultsResp?.json_defaults || {};
 
-  // merge: queue payload wins; otherwise fallback to defaults; otherwise hardcoded fallback
-  const mergedPrivacy  = privacy_status || defaults.privacy_status || "public";
-  const mergedCategory = category_id || defaults.category_id || "22";
-  const mergedTags     = Array.isArray(tags) ? tags :
-                         (Array.isArray(defaults.tags) ? defaults.tags : []);
+  // merge order: per-post overrides > payload fields > channel defaults > hardcoded fallback
+  const mergedPrivacy  = (perPost.privacy_status ?? privacy_status) || defaults.privacy_status || "public";
+  const mergedCategory = (perPost.category_id    ?? category_id)    || defaults.category_id    || "22";
 
-  // Respect either field name: append_shorts (new) or auto_shorts (existing)
-  const appendShorts = (defaults.append_shorts ?? defaults.auto_shorts ?? true);
+  const mergedTags =
+    Array.isArray(perPost.tags) ? perPost.tags :
+    (Array.isArray(tags) ? tags :
+    (Array.isArray(defaults.tags) ? defaults.tags : []));
 
-  // Optional description template from defaults
-  const descTemplate = (typeof defaults.description_template === "string")
-    ? defaults.description_template
-    : null;
+  const descTemplate = (typeof perPost.description_template === "string")
+    ? perPost.description_template
+    : (typeof defaults.description_template === "string" ? defaults.description_template : null);
+
+  const appendShorts = (perPost.append_shorts ?? perPost.auto_shorts ??
+                        defaults.append_shorts ?? defaults.auto_shorts ?? true);
 
   if (!publishing_id || !media_url || !title) {
     throw new Error("missing_required_fields(publishing_id|media_url|title)");
@@ -311,10 +342,11 @@ async function processMessage(env, msg, reqId) {
         append_shorts: appendShorts,
       });
 
-      const scheduled = publish_at && new Date(publish_at) > new Date();
+      const scheduled = scheduledAt && new Date(scheduledAt) > new Date();
       const status = scheduled
-        ? { privacyStatus: "private", publishAt: new Date(publish_at).toISOString() }
+        ? { privacyStatus: "private", publishAt: new Date(scheduledAt).toISOString() }
         : { privacyStatus: mergedPrivacy };
+
 
       const snippet = {
         title,
@@ -358,16 +390,20 @@ async function processMessage(env, msg, reqId) {
 // ----- Poll path (HTTP + Cron) -----
 async function pollScheduled(env, reqId) {
   const route = "POST /yt/poll-scheduled";
-  const list = await db1ListScheduled(env, { platform: "youtube", limit: 50 }, { request_id: reqId });
-  const rows = list?.items || [];
+  const list = await db1ListScheduled(env, { channel_key: "youtube", limit: 50 }, { request_id: reqId });
+  const rows = Array.isArray(list?.rows) ? list.rows : [];
   if (!rows.length) return { ok: true, checked: 0, updated: 0 };
 
   const { token } = await getAccessToken(env);
-  const idMap = rows
-    .filter(r => r.youtube_video_id)
-    .reduce((acc, r) => (acc[r.youtube_video_id] = r, acc), {});
+
+  // Map platform_media_id (YouTube ID) → publishing row
+  const idMap = rows.reduce((acc, r) => {
+    if (r.platform_media_id) acc[r.platform_media_id] = r;
+    return acc;
+  }, {});
   const ids = Object.keys(idMap);
-  if (!ids.length) return { ok: true, checked: 0, updated: 0 };
+  if (!ids.length) return { ok: true, checked: rows.length, updated: 0 };
+
 
   const statuses = await videosGetStatuses(token, ids);
   let updated = 0;

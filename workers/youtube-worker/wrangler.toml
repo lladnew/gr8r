@@ -8,6 +8,9 @@ queue = "pub-youtube-q"
 max_batch_size = 5
 max_batch_timeout = 5
 
+[vars]
+REQUIRE_FUTURE_SCHEDULE = "1"
+
 [[services]]
 binding = "DB1"
 service  = "gr8r-db1-worker"
@@ -47,6 +50,5 @@ binding     = "YOUTUBE_REFRESH_TOKEN"
 store_id    = "23d622f0d3b8499fa021fad6149af8c9"
 secret_name = "YOUTUBE_REFRESH_TOKEN"
 
-# --- Cron (off for now) ---
-# [triggers]
-# crons = ["*/10 * * * *"]
+[triggers]
+crons = ["*/10 * * * *"]
