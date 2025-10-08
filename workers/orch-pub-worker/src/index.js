@@ -1,3 +1,4 @@
+// v1.1.0 gr8r-orch-pub-worker ADDED:prod with public surface maybe...?... added cron trigger every 5min
 // v0.1.0 gr8r-orch-pub-worker ADDED: dev-first placeholder with __dev routes
 // - No public surface (403), but exposes __dev helpers for local testing
 // - Safe logging (console for info/debug; warn/error to Grafana)
@@ -137,6 +138,34 @@ function makeFakeRow(overrides = {}) {
     r2_key: overrides.r2_key || undefined, // if you want to test R2 later
   };
 }
+// ---------- cron helper: claim queued rows → enqueue to YouTube ----------
+async function scheduledClaimAndEnqueue(env) {
+  const request_id = uuid();
+  const limit = Number(env.CLAIM_LIMIT || 5);
+
+  // 1) claim (queued -> scheduling)
+  const { data } = await db1Fetch(env, "/publishing/claim", {
+    channel_key: "youtube",
+    limit,
+    request_id,
+  });
+  const claimed = Array.isArray(data?.rows) ? data.rows : [];
+
+  // 2) enqueue each to pub-youtube-q
+  for (const r of claimed) {
+    const msg = buildQueueMessage({ request_id, row: r, channel_defaults: null });
+    await enqueueYouTube(env, msg);
+  }
+
+  // 3) quiet success log
+  await safeLog(env, {
+    level: "info",
+    service: "cron",
+    message: "cron claimed & enqueued",
+    meta: { request_id, claimed_count: claimed.length, limit },
+  });
+}
+
 // ---------- worker entrypoints ----------
 export default {
   async fetch(request, env) {
@@ -319,20 +348,21 @@ export default {
     });
   },
 
-  // You can enable cron later by setting ENABLE_CRON=1 and adding a trigger in wrangler.toml
-  async scheduled(event, env) {
-    if (!env.ENABLE_CRON) return;
-    const request_id = uuid();
-    const t0 = Date.now();
-    try {
-      // In v0.1 we do nothing on cron – dev-only endpoints are enough.
-      console.log("[cron] noop", { request_id });
-    } catch (e) {
-      await safeLog(env, {
-        level: "error", service: "cron", message: "cron failed",
-        meta: { request_id, error: String(e), duration_ms: ms(t0) },
-      });
-    }
-  },
+    // Cron entry: claim queued → enqueue to YouTube
+    async scheduled(event, env) {
+      if (!env.ENABLE_CRON) return;
+      const t0 = Date.now();
+      const request_id = uuid();
+      try {
+        await scheduledClaimAndEnqueue(env);
+      } catch (e) {
+        await safeLog(env, {
+          level: "error",
+          service: "cron",
+          message: "cron failed",
+          meta: { request_id, error: String(e), duration_ms: ms(t0) },
+        });
+      }
+    },
 };
 

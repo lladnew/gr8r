@@ -41,3 +41,10 @@ secret_name = "GRAFANACLOUD_GR8R_LOGS_URL"
 binding = "PUB_YOUTUBE_Q"
 queue = "pub-youtube-q"
 
+[vars]
+ENABLE_CRON = "1"
+CLAIM_LIMIT = "5"         # how many to claim per tick
+
+[triggers]
+crons = ["*/5 * * * *"]   # every 5 minutes
+
