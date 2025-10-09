@@ -1,3 +1,4 @@
+// v1.0.3 gr8r-youtube-worker CHANGE: switch to chunked resumable uploads to avoid 413; add richer error capture & last-range logging
 // v1.0.2 gr8r-youtube-worker ADDED: retry_count logging and tweaked Grafana logging message
 // gr8r-youtube-worker v1.0.1 ADDED: check for existing platform_media_id and guard to stop past schedules and existing posts via matching media_ID
 // gr8r-youtube-consumer-worker v1.0.0 live version with cron
@@ -59,7 +60,6 @@ function buildDescription({ hook, body, cta, hashtags, template, append_shorts =
   return desc;
 }
 
-
 async function logError(env, message, meta = {}) {
   await safeLog(env, {
     level: "error",
@@ -76,6 +76,75 @@ async function logWarn(env, message, meta = {}) {
     message,
     meta: { ...meta },
   });
+}
+
+// ADDED: upload sizing (CF Workers subrequest body is limited)
+const MAX_SINGLESHOT = 95 * 1024 * 1024;         // ~95 MiB safety margin
+const CHUNK_SIZE     = 8  * 1024 * 1024;         // 8 MiB (multiple of 256 KiB)
+
+/** ADDED: fetch a byte range from media_url as an ArrayBuffer */
+async function fetchRange(url, start, end) {
+  const res = await fetch(url, { headers: { Range: `bytes=${start}-${end}` }});
+  if (!(res.status === 206 || res.status === 200)) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`media_range_fetch_failed_${res.status}:${txt.slice(0,200)}`);
+  }
+  const buf = await res.arrayBuffer();
+  // sanity: ensure server honored our range
+  const expectedLen = (end - start + 1);
+  if (res.status === 206 && buf.byteLength !== expectedLen) {
+    throw new Error(`media_range_length_mismatch:${buf.byteLength}!=${expectedLen}`);
+  }
+  // if res.status===200, we allow it only when start===0 and it exactly equals expectedLen
+  if (res.status === 200 && !(start === 0 && buf.byteLength === expectedLen)) {
+    throw new Error(`media_range_unexpected_200:got=${buf.byteLength},want=${expectedLen},start=${start}`);
+  }
+
+  return new Uint8Array(buf);
+}
+
+/** ADDED: chunked resumable PUT loop (returns final JSON with id) */
+async function uploadToSessionChunked(uploadUrl, mediaUrl, totalLen, contentType, logMeta, tokenForLogsOnly) {
+  let offset = 0;
+  let lastRangeAck = null;
+
+  while (offset < totalLen) {
+    const chunkEnd   = Math.min(offset + CHUNK_SIZE - 1, totalLen - 1);
+    const chunkBytes = await fetchRange(mediaUrl, offset, chunkEnd);
+    const chunkLen   = chunkBytes.byteLength;
+
+    const headers = {
+      "Content-Type":  contentType || "video/*",
+      "Content-Length": String(chunkLen),
+      "Content-Range": `bytes ${offset}-${offset + chunkLen - 1}/${totalLen}`,
+    };
+
+    const put = await fetch(uploadUrl, { method: "PUT", headers, body: chunkBytes });
+
+    // 308 = partial accepted; server may echo Range header like "bytes=0-8388607"
+    if (put.status === 308) {
+      lastRangeAck = put.headers.get("Range") || null;
+      offset += chunkLen;
+      continue;
+    }
+
+    if (!put.ok) {
+      const txt = await put.text().catch(() => "");
+      // ADDED: better context in the thrown message
+      throw new Error(`resumable_put_failed_${put.status}:${headers["Content-Range"]}:${(txt||"").slice(0,300)}`);
+    }
+
+    // Final chunk: server returns 200 + JSON Video resource
+    try {
+      const json = await put.json();
+      return json;
+    } catch (e) {
+      throw new Error(`resumable_put_final_parse_failed:${headers["Content-Range"]}:${e?.message||e}`);
+    }
+  }
+
+  // Should never get here
+  throw new Error(`resumable_loop_exhausted:last_range_ack=${lastRangeAck||"none"}`);
 }
 
 // ----- OAuth (Refresh → Access Token) -----
@@ -167,10 +236,11 @@ async function uploadToSession(uploadUrl, streamBody, contentType, contentLength
   }
 
   const end = contentLength - 1;
+  const rangeHdr = `bytes 0-${end}/${contentLength}`;
   const headers = {
     "Content-Type": contentType || "video/*",
     "Content-Length": String(contentLength),
-    "Content-Range": `bytes 0-${end}/${contentLength}`, // REQUIRED for single-shot resumable
+    "Content-Range": rangeHdr,
   };
 
   const put = await fetch(uploadUrl, {
@@ -187,7 +257,7 @@ async function uploadToSession(uploadUrl, streamBody, contentType, contentLength
 
   if (!put.ok) {
     const txt = await put.text().catch(() => "");
-    throw new Error(`resumable_put_failed_${put.status}:${txt}`);
+    throw new Error(`resumable_put_failed_${put.status}:${rangeHdr}:${(txt||"").slice(0,300)}`);
   }
 
   // Success → JSON Video resource, including id
@@ -415,21 +485,32 @@ async function processMessage(env, msg, reqId) {
         categoryId: mergedCategory,
       };
 
-
-
   // OAuth
   const { token } = await getAccessToken(env);
 
   // init resumable
   const uploadUrl = await createResumableSession(token, { snippet, status }, finalType, finalLen);
 
-  // stream media (GET) -> PUT to session
-  const mediaResp = await fetch(media_url);
-  if (!mediaResp.ok || !mediaResp.body) {
-    throw new Error(`media_fetch_failed_${mediaResp.status}`);
+  // CHANGED: choose chunked path for big files to avoid 413
+  let putJson;
+  if (finalLen > MAX_SINGLESHOT) {
+    // ADDED: chunked upload using Range GETs from R2
+    putJson = await uploadToSessionChunked(
+      uploadUrl,
+      media_url,
+      finalLen,
+      finalType,
+      { publishing_id, title },
+      token
+    );
+  } else {
+    // Existing single-shot path for small files
+    const mediaResp = await fetch(media_url);
+    if (!mediaResp.ok || !mediaResp.body) {
+      throw new Error(`media_fetch_failed_${mediaResp.status}`);
+    }
+    putJson = await uploadToSession(uploadUrl, mediaResp.body, finalType, finalLen);
   }
-
-  const putJson = await uploadToSession(uploadUrl, mediaResp.body, finalType, finalLen);
   const ytId = putJson?.id;
   if (!ytId) throw new Error("youtube_missing_video_id");
 
