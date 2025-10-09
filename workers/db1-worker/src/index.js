@@ -1,3 +1,5 @@
+//gr8r-db1-worker v1.4.1 CHANGE: updated Select statement to return existing platform_media_id and media_url - line 780
+//gr8r-db1-worker v1.4.1 CHANGE: updates for orch-pub-worker and added platform_url column dev_index.js
 //gr8r-db1-worker v1.4.0 CHANGE: new routes for orch-pub-worker promote to index.js
 //gr8r-db1-worker v1.3.9 EDIT: added 'scheduling' as a publishing.status option
 //gr8r-db1-worker v1.3.8 CHANGE: switch to safeLog approach and tighten logging by removing success messages
@@ -173,6 +175,7 @@ const TABLES = {
       "scheduled_at",
       "status",
       "platform_media_id",
+      "platform_url",
       "last_error",
       "posted_at",
       "options_json"
@@ -183,6 +186,7 @@ const TABLES = {
     clearableCols: new Set([
       "last_error",
       "platform_media_id",
+      "platform_url",
       "scheduled_at",
       "options_json"
     ]),
@@ -773,17 +777,18 @@ export default {
             p.channel_key       AS channel_key,
             p.scheduled_at      AS scheduled_at,
             p.options_json      AS options_json,
+            p.platform_media_id AS platform_media_id,   -- <-- add
+            p.platform_url      AS platform_url,        -- <-- add (if you created the column)
             v.title             AS title,
             v.social_copy_hook  AS hook,
             v.social_copy_body  AS body,
             v.social_copy_cta   AS cta,
             v.hashtags          AS hashtags,
             v.r2_url            AS media_url
-        FROM Publishing p
-        JOIN videos v ON v.id = p.video_id
-        WHERE p.id IN (${qMarks})
-        ORDER BY p.scheduled_at IS NULL, p.scheduled_at ASC, p.id ASC
-
+            FROM Publishing p
+            JOIN videos v ON v.id = p.video_id
+            WHERE p.id IN (${qMarks})
+            ORDER BY p.scheduled_at IS NULL, p.scheduled_at ASC, p.id ASC
         `;
         const joined = await env.DB.prepare(sqlJoin).bind(...ids).all();
 
@@ -807,18 +812,46 @@ export default {
     const req_id = crypto.randomUUID(); const tStart = Date.now();
     try {
         const body = await request.json().catch(() => ({}));
+
+        // Accept either style:
+        //  A) { publishing_id, patch: { ...columns... } }
+        //  B) { publishing_id, youtube_video_id?, youtube_url?, status?, posted_at?, scheduled_at?, last_error?, options_json? }
         const publishing_id = body?.publishing_id ?? body?.id;
-        const patch = body?.patch || {};
-        if (!publishing_id || typeof patch !== "object") {
-        await safeLog(env, { level: "warn", service: "db1-patch", message: "Bad input",
+        if (!publishing_id) {
+        await safeLog(env, { level: "warn", service: "db1-patch", message: "Bad input (missing id)",
             meta: { request_id: req_id, ok: false, status_code: 400, duration_ms: Date.now() - tStart }});
-        return new Response(JSON.stringify({ error: "publishing_id and patch required" }), {
+        return new Response(JSON.stringify({ error: "publishing_id required" }), {
             status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
         });
         }
 
-        // Allowed columns to patch
-        const allowed = new Set(["status", "platform_media_id", "last_error", "posted_at", "scheduled_at", "options_json"]);
+        // Start from provided patch if present, else empty object
+        const patch = (body && typeof body.patch === "object" && body.patch) ? { ...body.patch } : {};
+
+        // Map flat YouTube-style fields into DB columns if they weren't provided in patch
+        if (body.youtube_video_id && patch.platform_media_id == null) {
+        patch.platform_media_id = body.youtube_video_id;
+        }
+        if (body.youtube_url && patch.platform_url == null) {
+        patch.platform_url = body.youtube_url;
+        }
+
+        // Copy common fields if present and not already set in patch
+        for (const k of ["status","posted_at","scheduled_at","last_error","options_json","platform_media_id","platform_url"]) {
+        if (body[k] != null && patch[k] == null) patch[k] = body[k];
+        }
+
+        // Allowed columns to patch (now includes platform_url)
+        const allowed = new Set(["status","platform_media_id","platform_url","last_error","posted_at","scheduled_at","options_json"]);
+
+        // Validate status enum if provided
+        if (patch.status && !["pending","queued","scheduling","scheduled","posted","error","skipped"].includes(patch.status)) {
+        return new Response(JSON.stringify({ error: "invalid status" }), {
+            status: 422, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+        });
+        }
+
+        // Build SETs and bind values
         const sets = [];
         const binds = [];
         for (const [k, v] of Object.entries(patch)) {
@@ -827,17 +860,11 @@ export default {
         binds.push(v);
         }
         sets.push(`record_modified = ?`); binds.push(new Date().toISOString());
-        if (!sets.length) {
+
+        if (sets.length === 1) { // only record_modified added → nothing to update
         return new Response(JSON.stringify({ success: true, updated: 0 }), {
             status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
         });
-        }
-
-       // Basic enum guard for status (aligns with your enum: pending, queued, scheduling, scheduled, posted, error, skipped)
-        if (patch.status && !["pending","queued","scheduling","scheduled","posted","error","skipped"].includes(patch.status)) {
-          return new Response(JSON.stringify({ error: "invalid status" }), {
-            status: 422, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
-          });
         }
 
         const sql = `UPDATE Publishing SET ${sets.join(", ")} WHERE id = ?`;
@@ -854,6 +881,7 @@ export default {
         });
     }
     }
+
     // Handle POST /publishing/list-scheduled or /db1/publishing/list-scheduled
     if (request.method === "POST" &&
     (url.pathname === "/publishing/list-scheduled" || url.pathname === "/db1/publishing/list-scheduled")) {
