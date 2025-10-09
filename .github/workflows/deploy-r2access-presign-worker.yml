@@ -1,0 +1,17 @@
+name: Deploy gr8r-r2access-presign-worker
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "workers/r2access-presign-worker/**"
+      - ".github/workflows/deploy-r2access-presign-worker.yml"
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_deploy-worker.yml
+    with:
+      workingDirectory: workers/r2access-presign-worker
+      workerName: gr8r-r2access-presign-worker
+    secrets:
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

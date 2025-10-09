@@ -1,0 +1,44 @@
+name = "gr8r-r2access-presign-worker"
+main = "src/index.js"
+compatibility_date = "2025-10-09"
+account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
+workers_dev = false
+
+[observability.logs]
+enabled = true
+
+# Secrets Store bindings you already created
+[[secrets_store_secrets]]
+binding = "INTERNAL_WORKER_KEY"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "INTERNAL_WORKER_KEY"
+
+[[secrets_store_secrets]]
+binding = "R2_ACCOUNT_ID"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "R2_ACCOUNT_ID"
+
+[[secrets_store_secrets]]
+binding = "R2_ACCESS_KEY_ID"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "R2_ACCESS_KEY_ID"
+
+[[secrets_store_secrets]]
+binding = "R2_SECRET_ACCESS_KEY"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "R2_SECRET_ACCESS_KEY"
+
+[[secrets_store_secrets]]
+binding = "GRAFANACLOUD_GR8R_LOGS_KEY"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "GRAFANACLOUD_GR8R_LOGS_KEY"
+
+[[secrets_store_secrets]]
+binding = "GRAFANACLOUD_GR8R_LOGS_USER"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "GRAFANACLOUD_GR8R_LOGS_USER"
+
+[[secrets_store_secrets]]
+binding = "GRAFANACLOUD_GR8R_LOGS_URL"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "GRAFANACLOUD_GR8R_LOGS_URL"
