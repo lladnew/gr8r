@@ -1,4 +1,4 @@
-//gr8r-db1-worker v1.4.2 CHANGE: add logic for new column in publishing table retry_count
+//v1.4.2 gr8r-db1-worker CHANGE: add logic for new column in publishing table retry_count
 //gr8r-db1-worker v1.4.1 CHANGE: updated Select statement to return existing platform_media_id and media_url - line 780
 //gr8r-db1-worker v1.4.1 CHANGE: updates for orch-pub-worker and added platform_url column dev_index.js
 //gr8r-db1-worker v1.4.0 CHANGE: new routes for orch-pub-worker promote to index.js
