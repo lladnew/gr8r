@@ -1,3 +1,4 @@
+//gr8r-db1-worker v1.4.2 CHANGE: add logic for new column in publishing table retry_count
 //gr8r-db1-worker v1.4.1 CHANGE: updated Select statement to return existing platform_media_id and media_url - line 780
 //gr8r-db1-worker v1.4.1 CHANGE: updates for orch-pub-worker and added platform_url column dev_index.js
 //gr8r-db1-worker v1.4.0 CHANGE: new routes for orch-pub-worker promote to index.js
@@ -178,7 +179,8 @@ const TABLES = {
       "platform_url",
       "last_error",
       "posted_at",
-      "options_json"
+      "options_json",
+      "retry_count"
     ],
 
     // Only fields that may be forced to NULL via clears[]
@@ -842,7 +844,7 @@ export default {
         }
 
         // Allowed columns to patch (now includes platform_url)
-        const allowed = new Set(["status","platform_media_id","platform_url","last_error","posted_at","scheduled_at","options_json"]);
+        const allowed = new Set(["status","platform_media_id","platform_url","last_error","posted_at","scheduled_at","options_json","retry_count"]);
 
         // Validate status enum if provided
         if (patch.status && !["pending","queued","scheduling","scheduled","posted","error","skipped"].includes(patch.status)) {
