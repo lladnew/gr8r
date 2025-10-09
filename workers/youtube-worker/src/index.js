@@ -146,7 +146,7 @@ async function uploadToSessionChunked(uploadUrl, mediaUrl, totalLen, contentType
   // Should never get here
   throw new Error(`resumable_loop_exhausted:last_range_ack=${lastRangeAck||"none"}`);
 }
-/** ADDED: chunked resumable PUT loop from a single streaming GET (no Range support on origin) */
+/** REPLACED: chunked resumable PUT from a single streaming GET with low-copy accumulation */
 async function uploadToSessionChunkedFromStream(uploadUrl, mediaUrl, totalLen, contentType) {
   const res = await fetch(mediaUrl);
   if (!res.ok || !res.body) {
@@ -156,61 +156,133 @@ async function uploadToSessionChunkedFromStream(uploadUrl, mediaUrl, totalLen, c
 
   const reader = res.body.getReader();
   let offset = 0;
-  let buffer = new Uint8Array(0);
 
-  while (true) {
-    // Fill buffer up to CHUNK_SIZE (or until stream ends)
-    while (buffer.byteLength < CHUNK_SIZE) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      // append value to buffer
-      const next = new Uint8Array(buffer.byteLength + value.byteLength);
-      next.set(buffer, 0);
-      next.set(value, buffer.byteLength);
-      buffer = next;
+  // Accumulate small incoming pieces until we hit CHUNK_SIZE, then do one copy per chunk.
+  let parts = [];          // Array<Uint8Array>
+  let partsBytes = 0;      // total bytes in parts
+
+  // Helper: one allocation+copy per flushed chunk
+  const flushChunk = async (finalFlush = false) => {
+    if (partsBytes === 0) return null;
+
+    // If last chunk AND smaller than CHUNK_SIZE, send exactly what's left.
+    const sendLen = partsBytes;
+
+    // Single allocation, copy each part (O(n), once per chunk)
+    const chunk = new Uint8Array(sendLen);
+    let pos = 0;
+    for (const p of parts) {
+      chunk.set(p, pos);
+      pos += p.byteLength;
     }
 
-    const chunkLen = Math.min(buffer.byteLength, CHUNK_SIZE);
-    if (chunkLen === 0) break; // nothing left
+    // Reset accumulators before network (lets GC free memory sooner)
+    parts = [];
+    partsBytes = 0;
 
-    const chunk = buffer.subarray(0, chunkLen);
+    const end = offset + sendLen - 1;
     const headers = {
       "Content-Type":  contentType || "video/*",
-      "Content-Length": String(chunkLen),
-      "Content-Range": `bytes ${offset}-${offset + chunkLen - 1}/${totalLen}`,
+      "Content-Length": String(sendLen),
+      "Content-Range": `bytes ${offset}-${end}/${totalLen}`,
     };
 
     const put = await fetch(uploadUrl, { method: "PUT", headers, body: chunk });
 
-    // Shift remaining buffer down (avoid realloc where possible)
-    if (buffer.byteLength > chunkLen) {
-      buffer = buffer.subarray(chunkLen);
-    } else {
-      buffer = new Uint8Array(0);
-    }
-
     if (put.status === 308) {
-      // partial accepted; continue reading/sending
-      offset += chunkLen;
-      continue;
+      offset += sendLen;
+      return { done: false, json: null };
     }
-
     if (!put.ok) {
       const txt = await put.text().catch(() => "");
       throw new Error(`resumable_put_failed_${put.status}:${headers["Content-Range"]}:${(txt||"").slice(0,300)}`);
     }
-
-    // Final chunk returns JSON
-    try {
-      const json = await put.json();
-      return json;
-    } catch (e) {
+    // Final PUT returns JSON
+    const json = await put.json().catch((e) => {
       throw new Error(`resumable_put_final_parse_failed:${headers["Content-Range"]}:${e?.message||e}`);
+    });
+    offset += sendLen;
+    return { done: true, json };
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      // Flush whatever remains (may be < CHUNK_SIZE)
+      const final = await flushChunk(true);
+      if (final && final.done) return final.json;
+      // If stream ended exactly on a boundary, the last PUT would have already returned JSON
+      // and we’d have exited above. Otherwise, this is an early end.
+      if (offset !== totalLen) {
+        throw new Error(`media_stream_ended_early_at_${offset}_of_${totalLen}`);
+      }
+      // Shouldn’t reach here normally
+      throw new Error(`resumable_loop_exhausted_at_${offset}_of_${totalLen}`);
+    }
+
+    if (value && value.byteLength) {
+      parts.push(value);
+      partsBytes += value.byteLength;
+
+      // If we’ve met/exceeded CHUNK_SIZE, flush exactly CHUNK_SIZE bytes.
+      // We may have slightly overfilled; we’ll split the tail and keep remainder.
+      if (partsBytes >= CHUNK_SIZE) {
+        // Build a CHUNK_SIZE slice without copying twice:
+        let need = CHUNK_SIZE;
+        const toSend = [];
+        let keep = [];
+        for (const p of parts) {
+          if (need === 0) { keep.push(p); continue; }
+          if (p.byteLength <= need) {
+            toSend.push(p);
+            need -= p.byteLength;
+          } else {
+            // split p into head (toSend) + tail (keep)
+            toSend.push(p.subarray(0, need));
+            keep.push(p.subarray(need));
+            need = 0;
+          }
+        }
+        // Swap parts to keep only the remainder
+        parts = keep;
+        // Recompute sizes
+        let toSendBytes = 0;
+        for (const p of toSend) toSendBytes += p.byteLength;
+        let keepBytes = 0;
+        for (const p of keep) keepBytes += p.byteLength;
+        partsBytes = keepBytes;
+
+        // One allocation for exactly CHUNK_SIZE
+        const chunk = new Uint8Array(toSendBytes);
+        let pos = 0;
+        for (const p of toSend) { chunk.set(p, pos); pos += p.byteLength; }
+
+        const end = offset + chunk.byteLength - 1;
+        const headers = {
+          "Content-Type":  contentType || "video/*",
+          "Content-Length": String(chunk.byteLength),
+          "Content-Range": `bytes ${offset}-${end}/${totalLen}`,
+        };
+
+        const put = await fetch(uploadUrl, { method: "PUT", headers, body: chunk });
+
+        if (put.status === 308) {
+          offset += chunk.byteLength;
+          // continue reading
+        } else if (!put.ok) {
+          const txt = await put.text().catch(() => "");
+          throw new Error(`resumable_put_failed_${put.status}:${headers["Content-Range"]}:${(txt||"").slice(0,300)}`);
+        } else {
+          // Final JSON
+          const json = await put.json().catch((e) => {
+            throw new Error(`resumable_put_final_parse_failed:${headers["Content-Range"]}:${e?.message||e}`);
+          });
+          offset += chunk.byteLength;
+          return json;
+        }
+      }
     }
   }
-
-  // If we exit without returning, the stream ended early
-  throw new Error(`media_stream_ended_early_at_${offset}_of_${totalLen}`);
 }
 
 // ----- OAuth (Refresh → Access Token) -----

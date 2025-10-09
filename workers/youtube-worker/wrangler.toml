@@ -3,6 +3,9 @@ main = "src/index.js"
 compatibility_date = "2025-09-24"
 account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
 
+[observability.logs]
+enabled = true
+
 [[queues.consumers]]
 queue = "pub-youtube-q"
 max_batch_size = 5
