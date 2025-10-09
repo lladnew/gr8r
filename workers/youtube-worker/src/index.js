@@ -146,6 +146,72 @@ async function uploadToSessionChunked(uploadUrl, mediaUrl, totalLen, contentType
   // Should never get here
   throw new Error(`resumable_loop_exhausted:last_range_ack=${lastRangeAck||"none"}`);
 }
+/** ADDED: chunked resumable PUT loop from a single streaming GET (no Range support on origin) */
+async function uploadToSessionChunkedFromStream(uploadUrl, mediaUrl, totalLen, contentType) {
+  const res = await fetch(mediaUrl);
+  if (!res.ok || !res.body) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`media_stream_fetch_failed_${res.status}:${(txt||"").slice(0,200)}`);
+  }
+
+  const reader = res.body.getReader();
+  let offset = 0;
+  let buffer = new Uint8Array(0);
+
+  while (true) {
+    // Fill buffer up to CHUNK_SIZE (or until stream ends)
+    while (buffer.byteLength < CHUNK_SIZE) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      // append value to buffer
+      const next = new Uint8Array(buffer.byteLength + value.byteLength);
+      next.set(buffer, 0);
+      next.set(value, buffer.byteLength);
+      buffer = next;
+    }
+
+    const chunkLen = Math.min(buffer.byteLength, CHUNK_SIZE);
+    if (chunkLen === 0) break; // nothing left
+
+    const chunk = buffer.subarray(0, chunkLen);
+    const headers = {
+      "Content-Type":  contentType || "video/*",
+      "Content-Length": String(chunkLen),
+      "Content-Range": `bytes ${offset}-${offset + chunkLen - 1}/${totalLen}`,
+    };
+
+    const put = await fetch(uploadUrl, { method: "PUT", headers, body: chunk });
+
+    // Shift remaining buffer down (avoid realloc where possible)
+    if (buffer.byteLength > chunkLen) {
+      buffer = buffer.subarray(chunkLen);
+    } else {
+      buffer = new Uint8Array(0);
+    }
+
+    if (put.status === 308) {
+      // partial accepted; continue reading/sending
+      offset += chunkLen;
+      continue;
+    }
+
+    if (!put.ok) {
+      const txt = await put.text().catch(() => "");
+      throw new Error(`resumable_put_failed_${put.status}:${headers["Content-Range"]}:${(txt||"").slice(0,300)}`);
+    }
+
+    // Final chunk returns JSON
+    try {
+      const json = await put.json();
+      return json;
+    } catch (e) {
+      throw new Error(`resumable_put_final_parse_failed:${headers["Content-Range"]}:${e?.message||e}`);
+    }
+  }
+
+  // If we exit without returning, the stream ended early
+  throw new Error(`media_stream_ended_early_at_${offset}_of_${totalLen}`);
+}
 
 // ----- OAuth (Refresh → Access Token) -----
 async function getAccessToken(env) {
@@ -340,8 +406,6 @@ async function db1GetChannelDefaults(env, payload, reqMeta) {
   return res.json(); // -> { json_defaults }
 }
 
-
-
 // ----- Main processing for a single message -----
 async function processMessage(env, msg, reqId) {
   const t0 = Date.now();
@@ -458,12 +522,25 @@ async function processMessage(env, msg, reqId) {
       if (!finalType) finalType = head.headers.get("content-type") || "video/*";
     }
   }
-  if (!finalLen || !Number.isFinite(finalLen)) {
-    throw new Error("missing_content_length"); // keep resumable single-shot strict to avoid partials
-  }
-  if (!finalType) {
-    finalType = "video/*";
-  }
+   if (!finalLen || !Number.isFinite(finalLen)) {
+      throw new Error("missing_content_length"); // keep resumable single-shot strict to avoid partials
+    }
+    if (!finalType) {
+      finalType = "video/*";
+    }
+
+    // ADDED: detect Range support from origin (if HEAD provided header)
+    let supportsRanges = false;
+    try {
+      const head = await fetch(media_url, { method: "HEAD" });
+      if (head.ok) {
+        const ar = (head.headers.get("accept-ranges") || "").toLowerCase();
+        supportsRanges = ar.includes("bytes");
+      }
+    } catch (_) {
+      // if HEAD fails here, we’ll just assume false and use streaming fallback
+      supportsRanges = false;
+    }
 
   // build snippet/status
       const description = buildDescription({
@@ -494,15 +571,25 @@ async function processMessage(env, msg, reqId) {
   // CHANGED: choose chunked path for big files to avoid 413
   let putJson;
   if (finalLen > MAX_SINGLESHOT) {
-    // ADDED: chunked upload using Range GETs from R2
-    putJson = await uploadToSessionChunked(
-      uploadUrl,
-      media_url,
-      finalLen,
-      finalType,
-      { publishing_id, title },
-      token
-    );
+    if (supportsRanges) {
+      // Prefer Range-based chunking when origin honors Range
+      putJson = await uploadToSessionChunked(
+        uploadUrl,
+        media_url,
+        finalLen,
+        finalType,
+        { publishing_id, title },
+        token
+      );
+    } else {
+      // Fallback: single streaming GET → client-side chunking
+      putJson = await uploadToSessionChunkedFromStream(
+        uploadUrl,
+        media_url,
+        finalLen,
+        finalType
+      );
+    }
   } else {
     // Existing single-shot path for small files
     const mediaResp = await fetch(media_url);
@@ -511,6 +598,7 @@ async function processMessage(env, msg, reqId) {
     }
     putJson = await uploadToSession(uploadUrl, mediaResp.body, finalType, finalLen);
   }
+
   const ytId = putJson?.id;
   if (!ytId) throw new Error("youtube_missing_video_id");
 
