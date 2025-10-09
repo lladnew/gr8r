@@ -1,3 +1,4 @@
+// v1.0.2 gr8r-youtube-worker ADDED: retry_count logging and tweaked Grafana logging message
 // gr8r-youtube-worker v1.0.1 ADDED: check for existing platform_media_id and guard to stop past schedules and existing posts via matching media_ID
 // gr8r-youtube-consumer-worker v1.0.0 live version with cron
 // gr8r-youtube-consumer-worker v0.1.0
@@ -111,6 +112,24 @@ async function getAccessToken(env) {
   return { token: json.access_token, duration_ms: Date.now() - t0 };
 }
 
+async function db1GetPublishingById(env, publishing_id, reqMeta) {
+  const url = new URL("http://db1/db1/publishing");
+  url.searchParams.set("id", String(publishing_id));
+  url.searchParams.set("limit", "1");
+  const res = await env.DB1.fetch(url.toString(), {
+    method: "GET",
+    headers: {
+      "x-request-id": reqMeta?.request_id || shortId(),
+      "Authorization": `Bearer ${await getDb1Key(env)}`,
+    },
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`db1_get_publishing_failed_${res.status}:${txt}`);
+  }
+  const rows = await res.json().catch(() => []);
+  return Array.isArray(rows) && rows.length ? rows[0] : null;
+}
 
 // ----- YouTube Resumable Upload -----
 async function createResumableSession(token, metadata, contentType, contentLength) {
@@ -121,7 +140,8 @@ async function createResumableSession(token, metadata, contentType, contentLengt
     "Content-Type": "application/json; charset=UTF-8",
     "X-Upload-Content-Type": contentType || "video/*",
   };
-  if (contentLength && Number.isFinite(contentLength)) {
+
+  if (Number.isFinite(contentLength) && contentLength > 0) {
     headers["X-Upload-Content-Length"] = String(contentLength);
   }
 
@@ -142,10 +162,16 @@ async function createResumableSession(token, metadata, contentType, contentLengt
 }
 
 async function uploadToSession(uploadUrl, streamBody, contentType, contentLength) {
-  const headers = { "Content-Type": contentType || "video/*" };
-  if (contentLength && Number.isFinite(contentLength)) {
-    headers["Content-Length"] = String(contentLength);
+  if (!Number.isFinite(contentLength) || contentLength <= 0) {
+    throw new Error("missing_content_length");
   }
+
+  const end = contentLength - 1;
+  const headers = {
+    "Content-Type": contentType || "video/*",
+    "Content-Length": String(contentLength),
+    "Content-Range": `bytes 0-${end}/${contentLength}`, // REQUIRED for single-shot resumable
+  };
 
   const put = await fetch(uploadUrl, {
     method: "PUT",
@@ -153,12 +179,18 @@ async function uploadToSession(uploadUrl, streamBody, contentType, contentLength
     body: streamBody,
   });
 
+  // 308 = resumable "incomplete" (server didn’t get all bytes). Treat as error for now.
+  if (put.status === 308) {
+    const range = put.headers.get("Range"); // e.g., "bytes=0-1048575"
+    throw new Error(`resumable_incomplete_308:${range || "no-range"}`);
+  }
+
   if (!put.ok) {
     const txt = await put.text().catch(() => "");
     throw new Error(`resumable_put_failed_${put.status}:${txt}`);
   }
 
-  // On success, Google replies with JSON video resource
+  // Success → JSON Video resource, including id
   return put.json();
 }
 
@@ -462,37 +494,73 @@ export default {
         const result = await processMessage(env, msg, reqId);
         // explicit ack on success
         msg.ack();
-      } catch (err) {
-        const errorText = String(err?.message || err);
+            } catch (err) {
+              const errorText = String(err?.message || err);
 
-        // Log to Grafana (keeps your existing fields)
-        await logError(env, "youtube_consumer_failed", {
-          request_id: reqId,
-          route: "queue/PUB_YOUTUBE_Q",
-          method: "queue",
-          error: errorText,
-          ok: false,
-          status_code: 500,
-          duration_ms: Date.now() - t0,
-        });
+              // Pull identifiers for better logging & DB updates
+              let pubId = null;
+              let videoTitle = null;
+              try {
+                const raw = typeof msg.body === "string" ? JSON.parse(msg.body) : msg.body;
+                pubId = raw?.publishing_id ?? null;
+                videoTitle = raw?.title ?? null;
+              } catch (_) {}
 
-        // ---- policy / non-retryable errors: ACK (do NOT retry) ----
-        // - require_future_schedule: we’re intentionally blocking past/blank schedules
-        // - skip_upload_existing_platform_id: processMessage() shouldn’t throw this,
-        //   but if it ever does, we still want to ACK.
-        if (
-          errorText.startsWith("require_future_schedule") ||
-          errorText.startsWith("skip_upload_existing_platform_id")
-        ) {
-          msg.ack();
-          return;
-        }
+              // Decide retryability (same rules you already had)
+              const nonRetryable =
+                errorText.startsWith("require_future_schedule") ||
+                errorText.startsWith("skip_upload_existing_platform_id") ||
+                errorText.startsWith("missing_content_length") ||
+                (/^resumable_put_failed_4\d\d/.test(errorText) && !/429/.test(errorText)) ||
+                errorText.startsWith("oauth_refresh_failed_400");
 
-        // ---- transient/retryable errors: RETRY ----
-        // Network hiccups, token refresh blips, resumable PUT errors, etc.
-        // (Keep this broad for now; you can refine with more specific matches later.)
-        msg.retry();
-      }
+              // If we can, increment retry_count for visibility
+              if (pubId) {
+                try {
+                  const row = await db1GetPublishingById(env, pubId, { request_id: reqId });
+                  const current = Number(row?.retry_count || 0);
+                  const next = nonRetryable ? current : current + 1; // don't bump on terminal failures
+                  await db1Update(env, pubId, {
+                    retry_count: next,
+                    last_error: errorText.slice(0, 1000),
+                  }, { request_id: reqId });
+                } catch (_) {
+                  // ignore metrics write failures
+                }
+              }
+
+              // 🔎 Better log message + richer meta
+              await logError(env, `youtube_worker failed on "${videoTitle || "(untitled)"}"`, {
+                request_id: reqId,
+                route: "queue/PUB_YOUTUBE_Q",
+                method: "queue",
+                publishing_id: pubId ?? undefined,
+                video_title: videoTitle ?? undefined,
+                error: errorText,
+                ok: false,
+                status_code: 500,
+                duration_ms: Date.now() - t0,
+              });
+
+              if (nonRetryable) {
+                if (pubId) {
+                  try {
+                    const terminalStatus =
+                      errorText.startsWith("require_future_schedule") ||
+                      errorText.startsWith("skip_upload_existing_platform_id")
+                        ? "skipped"
+                        : "error";
+                    await db1Update(env, pubId, { status: terminalStatus }, { request_id: reqId });
+                  } catch (_) {}
+                }
+                msg.ack();
+                continue;
+              }
+
+              // Retryable: keep status as-is (scheduling), we already bumped retry_count & last_error
+              msg.retry();
+            }
+
     }
   },
 
