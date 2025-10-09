@@ -1,3 +1,4 @@
+//gr8r-db1-worker v1.4.3 CHANGE: add logic for new R2access presign columns and route and refresh logic to the new r2access-presign-worker
 //v1.4.2 gr8r-db1-worker CHANGE: add logic for new column in publishing table retry_count
 //gr8r-db1-worker v1.4.1 CHANGE: updated Select statement to return existing platform_media_id and media_url - line 780
 //gr8r-db1-worker v1.4.1 CHANGE: updates for orch-pub-worker and added platform_url column dev_index.js
@@ -318,6 +319,87 @@ function buildQueryParts(tableCfg, url) {
   const offset = Math.max(parseInt(searchParams.get("offset") || "0", 10), 0);
 
   return { where, binds, orderBy, limit, offset };
+}
+// ---- JSON + time helpers ----
+function jsonResponse(status, obj) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/** Returns ms remaining until ISO expiry; -1 if invalid/missing */
+function msUntilExpiry(iso) {
+  if (!iso) return -1;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? (t - Date.now()) : -1;
+}
+
+/** Clamp TTL seconds to sane bounds */
+function clampTtlSeconds(v, def = 1800, min = 300, max = 7200) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return def;
+  return Math.min(Math.max(n, min), max);
+}
+
+// ---- D1 helpers for videos.presign fields ----
+async function d1GetVideoById(env, id) {
+  const r = await env.DB
+    .prepare(`SELECT id, r2_url, r2presigned, r2presigned_expires_at FROM videos WHERE id = ? LIMIT 1`)
+    .bind(id)
+    .first();
+  return r || null;
+}
+
+async function d1UpdatePresign(env, id, url, expiresIso) {
+  await env.DB
+    .prepare(`UPDATE videos SET r2presigned = ?, r2presigned_expires_at = ? WHERE id = ?`)
+    .bind(url, expiresIso, id)
+    .run();
+}
+
+// ---- Outbound: call presigner worker (secured with INTERNAL_WORKER_KEY) ----
+async function callPresigner(env, payload) {
+  const presignerUrl = env.R2PRESIGNER_URL; // e.g., https://r2access-presign-worker.../presign
+  if (!presignerUrl) {
+    return { ok: false, status: 500, error: "presigner_unconfigured" };
+  }
+
+  // Pull INTERNAL_WORKER_KEY from Secrets Store (NOT the DB1 key)
+  let interKey = "";
+  try {
+    interKey = (await getSecret(env, "INTERNAL_WORKER_KEY"))?.toString().trim() || "";
+  } catch (_) {}
+  if (!interKey) {
+    return { ok: false, status: 500, error: "internal_worker_key_missing" };
+  }
+
+  const reqId = crypto.randomUUID().slice(0, 8);
+  const res = await fetch(presignerUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${interKey}`,
+      "X-Request-ID": reqId,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const text = await res.text().catch(() => "");
+  if (!res.ok) {
+    return { ok: false, status: res.status, error: text.slice(0, 200) };
+  }
+
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* noop */ }
+
+  const url = json?.url || null;
+  const expires_at = json?.expires_at || null; // ISO8601 UTC
+  if (!url || !expires_at) {
+    return { ok: false, status: 502, error: "presigner_bad_response" };
+  }
+
+  return { ok: true, status: 200, url, expires_at };
 }
 
 function buildUpsertSQL(tableCfg, body) {
@@ -917,6 +999,51 @@ export default {
         status: 500, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
         });
     }
+    }
+
+    // ---- Outbound: call presigner worker via Service Binding (secured with INTERNAL_WORKER_KEY) ----
+    async function callPresigner(env, payload) {
+      if (!env.R2PRESIGNER || typeof env.R2PRESIGNER.fetch !== "function") {
+        return { ok: false, status: 500, error: "presigner_binding_missing" };
+      }
+
+      // INTERNAL_WORKER_KEY (Secrets Store) — used only outbound from DB1 -> presigner
+      let interKey = "";
+      try {
+        interKey = (await getSecret(env, "INTERNAL_WORKER_KEY"))?.toString().trim() || "";
+      } catch (_) {}
+      if (!interKey) {
+        return { ok: false, status: 500, error: "internal_worker_key_missing" };
+      }
+
+      const reqId = crypto.randomUUID().slice(0, 8);
+
+      // Path matters; host is ignored for service bindings
+      const res = await env.R2PRESIGNER.fetch("https://presign.internal/presign", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${interKey}`,
+          "X-Request-ID": reqId,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const text = await res.text().catch(() => "");
+      if (!res.ok) {
+        return { ok: false, status: res.status, error: text.slice(0, 200) };
+      }
+
+      let json = null;
+      try { json = JSON.parse(text); } catch { /* noop */ }
+
+      const url = json?.url || null;
+      const expires_at = json?.expires_at || null; // ISO8601 UTC
+      if (!url || !expires_at) {
+        return { ok: false, status: 502, error: "presigner_bad_response" };
+      }
+
+      return { ok: true, status: 200, url, expires_at };
     }
 
     //UPSERT code includes time/date stamping for record_created and/or record_modified
