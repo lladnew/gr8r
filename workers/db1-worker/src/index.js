@@ -1,3 +1,4 @@
+//gr8r-db1-worker v1.4.7 FIXES: fixt for channel.retry_count default
 //gr8r-db1-worker v1.4.6 FIXES: removed extra get-presigned handler... chatGPT... RMEs
 //gr8r-db1-worker v1.4.5 FIXES: if request missing URL grabs from db1.videos.r2url
 //gr8r-db1-worker v1.4.4 FIXES: misses and errors from previous attempt
@@ -210,6 +211,11 @@ const TABLES = {
       // channel_key validation will be dynamic against Channels table (see handler patch below)
     },
 
+        // ADDED: default values to apply on INSERT when body omits the field
+    insertDefaults: {                       
+      retry_count: 0                        
+    },                                      
+
     searchable: ["channel_key", "last_error", "options_json"],
     defaultSort: "record_modified DESC",
     filterMap: {
@@ -368,18 +374,32 @@ function buildUpsertSQL(tableCfg, body) {
 
   // Insert columns include the chosen unique cols, plus editables and timestamps
   const allInsertCols = [...uniqueCols, ...(editableCols || []), "record_created", "record_modified"];
+  const insertDefaults = tableCfg.insertDefaults || {};    
   const payload = {};
   for (const c of allInsertCols) {
-    payload[c] = (c === "record_created" || c === "record_modified") ? now : (body?.[c] ?? null);
+    if (c === "record_created" || c === "record_modified") {
+      payload[c] = now;
+    } else if (body?.hasOwnProperty(c) && body[c] !== undefined) {
+      payload[c] = body[c];
+    } else if (Object.prototype.hasOwnProperty.call(insertDefaults, c)) { // ADDED
+      payload[c] = insertDefaults[c];                                     // ADDED
+    } else {
+      payload[c] = null;
+    }
   }
 
   const rawClears = Array.isArray(body?.clears) ? body.clears : [];
   const clears = rawClears.filter(k => typeof k === "string" && clearableCols?.has?.(k));
 
+  // Only update columns that are explicitly provided or cleared
+  const bodyCols = new Set(Object.keys(body || {}));
+  const colsToUpdate = (editableCols || []).filter(col => bodyCols.has(col) || clears.includes(col));
+
   const updateAssignments = [
-    ...(editableCols || []).map(col => clears.includes(col)
-      ? `${col} = NULL`
-      : `${col} = COALESCE(excluded.${col}, ${table}.${col})`
+    ...colsToUpdate.map(col =>
+      clears.includes(col)
+        ? `${col} = NULL`
+        : `${col} = COALESCE(excluded.${col}, ${table}.${col})`
     ),
     `record_modified = ?`,
   ].join(", ");
