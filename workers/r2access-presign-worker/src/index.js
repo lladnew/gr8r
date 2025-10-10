@@ -1,3 +1,4 @@
+// gr8r-r2access-presign-worker v1.0.2 — fixing issues primarily parseR2URL was breaking... ChatGPT RMEs
 // gr8r-r2access-presign-worker v1.0.1 — presign GET for R2 objects with Grafana logging
 
 import { getSecret } from "../../../lib/secrets.js";
@@ -50,20 +51,45 @@ function toISOInSecondsFromNow(ttlSeconds) {
 }
 
 function parseR2Url(r2_url) {
-  if (typeof r2_url !== "string" || !r2_url) {
-    return { ok: false, error: "bad_r2_url" };
+  if (r2_url == null) return { ok: false, error: "bad_r2_url_empty" };
+
+  // normalize & trim
+  const raw = String(r2_url).trim();
+  if (!raw) return { ok: false, error: "bad_r2_url_empty" };
+
+  // Case 1: r2://bucket/key
+  if (raw.startsWith("r2://")) {
+    const m = /^r2:\/\/([^/]+)\/(.+)$/.exec(raw);
+    if (!m) return { ok: false, error: "bad_r2_url_parse" };
+    const bucket = m[1];
+    const key = decodeURIComponent(m[2]).replace(/^\/+/, "");
+    if (!key) return { ok: false, error: "missing_key" };
+    return { ok: true, bucket, key };
   }
-  try {
-    const u = new URL(r2_url);
-    // Expect your custom videos domain: https://videos.gr8r.com/<key>
-    if (u.hostname !== CUSTOM_VIDEO_HOST) {
-      return { ok: false, error: "unexpected_host" };
-    }
-    const key = u.pathname.replace(/^\/+/, "");
+
+  // Case 2: bare key (no scheme/host); accept as-is for your single bucket
+  if (!/^[a-z]+:\/\//i.test(raw) && !raw.startsWith("//")) {
+    const key = decodeURIComponent(raw).replace(/^\/+/, "");
     if (!key) return { ok: false, error: "missing_key" };
     return { ok: true, bucket: BUCKET, key };
+  }
+
+  // Case 3: https://videos.gr8r.com/<key> (your stored form)
+  try {
+    const u = new URL(raw);
+    const host = u.hostname.toLowerCase();
+
+    if (host !== CUSTOM_VIDEO_HOST) {
+      // keep this strict for security; if you ever want to relax, handle here
+      return { ok: false, error: "unexpected_host", host };
+    }
+
+    const key = decodeURIComponent(u.pathname.replace(/^\/+/, ""));
+    if (!key) return { ok: false, error: "missing_key" };
+
+    return { ok: true, bucket: BUCKET, key };
   } catch {
-    return { ok: false, error: "bad_r2_url" };
+    return { ok: false, error: "bad_r2_url_parse" };
   }
 }
 
