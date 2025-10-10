@@ -1,0 +1,32 @@
+Stage 4 – YouTube worker uses presigned URLs
+
+We’ve finished Stage 3 (db1 /db1/videos/get-presigned is live and tested).
+Now update youtube-worker to:
+
+Claim jobs from /db1/publishing/claim with channel_key:"youtube".
+
+For each job, call /db1/videos/get-presigned (internal bearer) to get r2presigned.
+
+Upload to YouTube via resumable upload, streaming bytes from r2presigned.
+
+Patch /db1/publishing/update as it progresses:
+
+On start: status:"scheduling".
+
+On success: status:"scheduled" (if future publishAt) or status:"posted" (immediate), set platform_media_id, platform_url, posted_at if applicable, clear last_error, bump retry_count.
+
+On fail: status:"error", set last_error, bump retry_count.
+
+Don’t log tokens or presigned URLs. Optional VERBOSE_YT console debug only.
+
+Deliver:
+
+Surgical code patches only for youtube-worker (no refactors elsewhere).
+
+Tiny test plan (PowerShell/curl) to prove: claim → presign → upload → patch.
+
+Exact request/response shapes you use for the three DB1 routes + YouTube (token + upload).
+
+10-line README delta for env vars/flags.
+
+Keep it concise and copy/paste-ready.
