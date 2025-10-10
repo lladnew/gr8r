@@ -1,3 +1,4 @@
+//gr8r-db1-worker v1.4.5 FIXES: if request missing URL grabs from db1.videos.r2url
 //gr8r-db1-worker v1.4.4 FIXES: misses and errors from previous attempt
 //gr8r-db1-worker v1.4.3 CHANGE: add logic for new R2access presign columns and route and refresh logic to the new r2access-presign-worker
 //v1.4.2 gr8r-db1-worker CHANGE: add logic for new column in publishing table retry_count
@@ -1110,6 +1111,115 @@ export default {
       }
 
       return { ok: true, status: 200, url, expires_at };
+    }
+
+        // Handle POST /videos/get-presigned or /db1/videos/get-presigned
+    if (request.method === "POST" &&
+       (url.pathname === "/videos/get-presigned" || url.pathname === "/db1/videos/get-presigned")) {
+      const req_id = crypto.randomUUID(); const tStart = Date.now();
+      try {
+        // internal-only
+        const isOk = await checkInternalKey(request, env);
+        if (!isOk) {
+          await safeLog(env, { level: "info", service: "db1-presign", message: "Unauthorized",
+            meta: { request_id: req_id, route: url.pathname, method: request.method, ok: false, status_code: 401, duration_ms: Date.now() - tStart }});
+          return new Response(JSON.stringify({ ok:false, error:"unauthorized" }), {
+            status: 401, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+          });
+        }
+
+        const body = await request.json().catch(() => ({}));
+        const video_id  = Number(body?.video_id || 0) || null;
+        const requester = String(body?.requester || "unknown");
+        const reason    = String(body?.reason || "");
+        const ttl       = clampTtlSeconds(body?.ttl_seconds, 1800); // 30m default
+        let   r2_url    = (typeof body?.r2_url === "string" ? body.r2_url.trim() : "");
+
+        if (!video_id) {
+          return new Response(JSON.stringify({ ok:false, error:"video_id_required" }), {
+            status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+          });
+        }
+
+        // pull from DB if caller didn't supply r2_url
+        if (!r2_url) {
+          const row = await d1GetVideoById(env, video_id);
+          if (!row) {
+            return new Response(JSON.stringify({ ok:false, error:"video_not_found" }), {
+              status: 404, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+            });
+          }
+          r2_url = (row.r2_url || "").trim();
+          if (!r2_url) {
+            return new Response(JSON.stringify({ ok:false, error:"missing_r2_url_on_video" }), {
+              status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+            });
+          }
+        }
+
+        // call presigner via service binding (INTERNAL_WORKER_KEY)
+        const pres = await callPresigner(env, {
+          r2_url,
+          ttl_seconds: ttl,
+          requester,
+          reason,
+          video_id,
+        });
+
+        if (!pres.ok) {
+          await safeLog(env, {
+            level: "error",
+            service: "db1-presign",
+            message: "presign failed",
+            meta: {
+              request_id: req_id, video_id, requester, reason,
+              error: pres.error, status_code: pres.status || 502, ok: false,
+              duration_ms: Date.now() - tStart
+            }
+          });
+          return new Response(JSON.stringify({ ok:false, error:"presign_failed", detail: JSON.stringify({ ok:false, error: pres.error }) }), {
+            status: 502, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+          });
+        }
+
+        // persist to videos
+        const expiresIso = pres.expires_at;
+        await d1UpdatePresign(env, video_id, pres.url, expiresIso);
+
+        const remaining = msUntilExpiry(expiresIso);
+
+        await safeLog(env, {
+          level: "info",
+          service: "db1-presign",
+          message: "presign ok",
+          meta: {
+            request_id: req_id, video_id, requester, reason,
+            presign_expires_in_ms: remaining, ok: true, status_code: 200,
+            duration_ms: Date.now() - tStart
+          }
+        });
+
+        return new Response(JSON.stringify({
+          ok: true,
+          video_id,
+          r2presigned: pres.url,
+          r2presigned_expires_at: expiresIso,
+          presign_expires_in_ms: remaining
+        }), {
+          status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+        });
+
+      } catch (err) {
+        await safeLog(env, {
+          level: "error",
+          service: "db1-presign",
+          message: "server error",
+          meta: { request_id: req_id, ok: false, status_code: 500, error: err?.message, duration_ms: Date.now() - tStart }
+        });
+        return new Response(JSON.stringify({ ok:false, error:"server_error" }), {
+          status: 500, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+        });
+      }
     }
 
     //UPSERT code includes time/date stamping for record_created and/or record_modified
