@@ -1,3 +1,4 @@
+// v1.0.4 gr8r-youtube-worker CHANGE: YT upload redesign to use pre-signed URL's from db1.videos to upload directly to Youtube also modified logging to better fit defined process
 // v1.0.3 gr8r-youtube-worker CHANGE: switch to chunked resumable uploads to avoid 413; add richer error capture & last-range logging
 // v1.0.2 gr8r-youtube-worker ADDED: retry_count logging and tweaked Grafana logging message
 // gr8r-youtube-worker v1.0.1 ADDED: check for existing platform_media_id and guard to stop past schedules and existing posts via matching media_ID
@@ -9,19 +10,27 @@
 import { getSecret } from "../../../lib/secrets.js";
 import { createLogger } from "../../../lib/grafana.js";
 
+const SOURCE  = "gr8r-youtube-worker";
+const SERVICE = "youtube-worker";
+
 // ---------- logging (matches your policy) ----------
-const _logger = createLogger({ source: "gr8r-youtube-worker" });
+const _logger = createLogger({ source: SOURCE });
 async function safeLog(env, entry) {
   try {
     const level = entry?.level || "info";
-    if (level === "debug" || level === "info") {
+    const meta  = entry?.meta || {};
+
+    // Promote: send selected info logs to Grafana iff meta.promote === true or INFO_TO_GRAFANA=1
+    const promoteInfo = level === "info" && (meta.promote === true || env.INFO_TO_GRAFANA === "1");
+
+    if (level === "debug" || (level === "info" && !promoteInfo)) {
       console[level === "debug" ? "debug" : "log"](
         `[${entry?.service || "youtube"}] ${entry?.message || ""}`,
-        entry?.meta || {}
+        meta
       );
       return;
     }
-    await _logger(env, entry); // warn/error → Grafana
+    await _logger(env, entry); // warn/error always → Grafana; info only if promoted
   } catch (e) {
     console.log("LOG_FAIL", entry?.service || "unknown", e?.stack || e?.message || e);
   }
@@ -33,9 +42,6 @@ async function getDb1Key(env) {
   if (!key) throw new Error("missing_DB1_INTERNAL_KEY");
   return key;
 }
-
-const SOURCE  = "gr8r-youtube-worker";
-const SERVICE = "youtube-worker";
 
 // ----- tiny helpers -----
 const nowIso = () => new Date().toISOString();
@@ -60,23 +66,28 @@ function buildDescription({ hook, body, cta, hashtags, template, append_shorts =
   return desc;
 }
 
-async function logError(env, message, meta = {}) {
+async function logError(env, message, meta = {}, service = SERVICE) {
   await safeLog(env, {
     level: "error",
-    service: SERVICE,
+    service,
     message,
     meta: { ...meta },
   });
 }
 
-async function logWarn(env, message, meta = {}) {
+async function logWarn(env, message, meta = {}, service = SERVICE) {
   await safeLog(env, {
     level: "warn",
-    service: SERVICE,
+    service,
     message,
     meta: { ...meta },
   });
 }
+
+// convenience: common service names (low-cardinality)
+const SERVICE_QUEUE = "queue-consume";
+const SERVICE_UPLOAD = "yt-upload";
+const SERVICE_POLL = "poll-scheduled";
 
 // ADDED: upload sizing (CF Workers subrequest body is limited)
 const MAX_SINGLESHOT = 95 * 1024 * 1024;         // ~95 MiB safety margin
@@ -104,7 +115,7 @@ async function fetchRange(url, start, end) {
 }
 
 /** ADDED: chunked resumable PUT loop (returns final JSON with id) */
-async function uploadToSessionChunked(uploadUrl, mediaUrl, totalLen, contentType, logMeta, tokenForLogsOnly) {
+async function uploadToSessionChunked(uploadUrl, mediaUrl, totalLen, contentType) {
   let offset = 0;
   let lastRangeAck = null;
 
@@ -320,7 +331,7 @@ async function getAccessToken(env) {
 }
 
 async function db1GetPublishingById(env, publishing_id, reqMeta) {
-  const url = new URL("http://db1/db1/publishing");
+  const url = new URL("http://db1/publishing");
   url.searchParams.set("id", String(publishing_id));
   url.searchParams.set("limit", "1");
   const res = await env.DB1.fetch(url.toString(), {
@@ -458,7 +469,6 @@ async function db1ListScheduled(env, payload, reqMeta) {
   return res.json();
 }
 
-
 // ----- DB1: get channel defaults by channel key (e.g., 'youtube') -----
 async function db1GetChannelDefaults(env, payload, reqMeta) {
   const res = await env.DB1.fetch("http://db1/channels/get-defaults", {
@@ -481,7 +491,6 @@ async function db1GetChannelDefaults(env, payload, reqMeta) {
 // ----- Main processing for a single message -----
 async function processMessage(env, msg, reqId) {
   const t0 = Date.now();
-  const route = "queue/PUB_YOUTUBE_Q";
   let payload = msg.body;
   if (typeof payload === "string") {
     try { payload = JSON.parse(payload); } catch { /* keep as raw string */ }
@@ -493,7 +502,6 @@ async function processMessage(env, msg, reqId) {
   const {
     publishing_id,
     video_id,
-    media_url,
     title,
     hook,
     body,
@@ -502,9 +510,6 @@ async function processMessage(env, msg, reqId) {
     tags,
     category_id,
     privacy_status,       // "public" | "unlisted" | "private"
-    publish_at,           // legacy; ISO string
-    content_length,       // optional
-    content_type,         // optional
     platform_media_id: existingYtId, // NEW: carry-through from queue
   } = payload;
 
@@ -539,7 +544,7 @@ async function processMessage(env, msg, reqId) {
       publishing_id,
       youtube_video_id: existingYtId,
       scheduledAt,
-    });
+    }, SERVICE_UPLOAD);
 
     // Keep DB coherent
     await db1Update(
@@ -551,9 +556,11 @@ async function processMessage(env, msg, reqId) {
       },
       { request_id: reqId }
     );
-
     return { ok: true, skipped: true, reason: "existing_platform_id" };
   }
+
+  // Stage 4: On start → mark scheduling for queue-driven uploads too
+  await db1Update(env, publishing_id, { status: "scheduling" }, { request_id: reqId });
 
   // channel key (Channels.key); default to 'youtube' unless explicitly provided
    const channel_key = payload.channel_key || "youtube";
@@ -580,26 +587,21 @@ async function processMessage(env, msg, reqId) {
   const appendShorts = (perPost.append_shorts ?? perPost.auto_shorts ??
                         defaults.append_shorts ?? defaults.auto_shorts ?? true);
 
-  if (!publishing_id || !media_url || !title) {
-    throw new Error("missing_required_fields(publishing_id|media_url|title)");
+  if (!publishing_id || !video_id || !title) {
+    throw new Error("missing_required_fields(publishing_id|video_id|title)");
   }
 
-  // try to learn content-length/content-type (R2 should provide them; HEAD preferred)
-  let finalLen = Number(content_length) || 0;
-  let finalType = content_type || "";
-  if (!finalLen || !finalType) {
-    const head = await fetch(media_url, { method: "HEAD" });
-    if (head.ok) {
-      if (!finalLen)  finalLen  = Number(head.headers.get("content-length") || 0);
-      if (!finalType) finalType = head.headers.get("content-type") || "video/*";
-    }
+  // Always pull presigned URL + metadata from DB1 by video_id
+  const pres = await db1GetPresigned(env, video_id, { request_id: reqId });
+  const r2 = pres?.r2presigned || {};
+  const media_url = r2.url;
+  let finalLen = Number(r2.contentLength || 0);
+  let finalType = r2.contentType || "";
+
+  if (!media_url || !Number.isFinite(finalLen) || finalLen <= 0) {
+    // optional fallback: try HEAD on media_url if you allow it
+    throw new Error("missing_presigned_or_length");
   }
-   if (!finalLen || !Number.isFinite(finalLen)) {
-      throw new Error("missing_content_length"); // keep resumable single-shot strict to avoid partials
-    }
-    if (!finalType) {
-      finalType = "video/*";
-    }
 
     // ADDED: detect Range support from origin (if HEAD provided header)
     let supportsRanges = false;
@@ -650,8 +652,6 @@ async function processMessage(env, msg, reqId) {
         media_url,
         finalLen,
         finalType,
-        { publishing_id, title },
-        token
       );
     } else {
       // Fallback: single streaming GET → client-side chunking
@@ -674,7 +674,13 @@ async function processMessage(env, msg, reqId) {
   const ytId = putJson?.id;
   if (!ytId) throw new Error("youtube_missing_video_id");
 
-  // write back to DB1
+  // write back to DB1 (success: bump retry_count, clear last_error)
+  let nextRetry = 1;
+  try {
+    const row = await db1GetPublishingById(env, publishing_id, { request_id: reqId });
+    nextRetry = Number(row?.retry_count || 0) + 1;
+  } catch (_) {}
+
   await db1Update(
     env,
     publishing_id,
@@ -683,18 +689,65 @@ async function processMessage(env, msg, reqId) {
       platform_url: `https://youtu.be/${ytId}`,
       status: scheduled ? "scheduled" : "posted",
       posted_at: scheduled ? null : nowIso(),
+      retry_count: nextRetry,
+      last_error: null,
     },
     { request_id: reqId }
   );
 
+    if (env.VERBOSE_YT === "1") {
+      console.log(`[${SERVICE}] upload ok publishing_id=${publishing_id} yt=${ytId} scheduled=${scheduled}`);
+    }
+    await safeLog(env, {
+      level: "info",
+      service: SERVICE_UPLOAD,
+      message: scheduled
+        ? `youtube successfully scheduled "${(title || "").slice(0,120)}"`
+        : `youtube successfully posted "${(title || "").slice(0,120)}"`,
+      meta: {
+        request_id: reqId,
+        route: "queue/PUB_YOUTUBE_Q",
+        method: "queue",
+        status_code: 200,
+        ok: true,
+        duration_ms: Date.now() - t0,
+        promote: true,
+        publishing_id,
+        youtube_video_id: ytId,
+        title: (title || "").slice(0,120),
+        scheduled_at: scheduled
+          ? (typeof scheduledAt === "string"
+              ? scheduledAt
+              : (scheduledAt ? new Date(scheduledAt).toISOString() : null))
+          : null
+      }
+    });
 
-  console.log(`[${SERVICE}] upload ok publishing_id=${publishing_id} yt=${ytId} scheduled=${scheduled}`);
   return { ok: true, ytId, scheduled, duration_ms: Date.now() - t0 };
+}
+
+// ----- DB1: get R2 presigned URL by video_id -----
+async function db1GetPresigned(env, video_id, reqMeta) {
+  const res = await env.DB1.fetch("http://db1/videos/get-presigned", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-request-id": reqMeta?.request_id || shortId(),
+      "Authorization": `Bearer ${await getDb1Key(env)}`,
+    },
+    // DB1 expects { video_id }
+    body: JSON.stringify({ video_id }),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`db1_get_presigned_failed_${res.status}:${txt}`);
+  }
+  // { r2presigned: { url, contentType, contentLength } }
+  return res.json();
 }
 
 // ----- Poll path (HTTP + Cron) -----
 async function pollScheduled(env, reqId) {
-  const route = "POST /yt/poll-scheduled";
   const list = await db1ListScheduled(env, { channel_key: "youtube", limit: 50 }, { request_id: reqId });
   const rows = Array.isArray(list?.rows) ? list.rows : [];
   if (!rows.length) return { ok: true, checked: 0, updated: 0 };
@@ -719,15 +772,51 @@ async function pollScheduled(env, reqId) {
       const publishing_id = idMap[ytId].publishing_id;
       await db1Update(env, publishing_id, { status: "posted", posted_at: nowIso() }, { request_id: reqId });
       updated++;
+      const videoTitle = (idMap[ytId]?.title || "").slice(0,120);
+      await safeLog(env, {
+        level: "info",
+        service: SERVICE_POLL,
+        message: `youtube video live "${videoTitle || ytId}"`,
+        meta: {
+          request_id: reqId,
+          route: "CRON /yt/poll-scheduled",
+          method: "SCHEDULED",
+          status_code: 200,
+          ok: true,
+          promote: true,
+          publishing_id,
+          youtube_video_id: ytId,
+          title: videoTitle || null
+        }
+        });
+
     }
   }
   console.log(`[${SERVICE}] poll ok checked=${rows.length} updated=${updated}`);
+  await safeLog(env, {
+    level: "info",
+    service: SERVICE_POLL,
+    message: "youtube poll summary",
+    meta: {
+      request_id: reqId,
+      route: "CRON /yt/poll-scheduled",
+      method: "SCHEDULED",
+      status_code: 200,
+      ok: true,
+      promote: true,
+      checked: rows.length,
+      updated
+    }
+  });
   return { ok: true, checked: rows.length, updated };
 }
 
 export default {
   // ----- Queues consumer -----
   async queue(batch, env, ctx) {
+    let cnt_acked = 0, cnt_retried = 0, cnt_errors = 0, cnt_skipped = 0;
+    const batchSize = batch.messages.length;
+    const batch_id = shortId();
     for (const msg of batch.messages) {
       const reqId = shortId();
       const t0 = Date.now();
@@ -735,6 +824,11 @@ export default {
         const result = await processMessage(env, msg, reqId);
         // explicit ack on success
         msg.ack();
+        if (result?.skipped) {
+          cnt_skipped++;
+        } else {
+          cnt_acked++;
+        }
             } catch (err) {
               const errorText = String(err?.message || err);
 
@@ -744,14 +838,15 @@ export default {
               try {
                 const raw = typeof msg.body === "string" ? JSON.parse(msg.body) : msg.body;
                 pubId = raw?.publishing_id ?? null;
-                videoTitle = raw?.title ?? null;
+                videoTitle = raw?.title ?? null; 
               } catch (_) {}
 
               // Decide retryability (same rules you already had)
               const nonRetryable =
                 errorText.startsWith("require_future_schedule") ||
                 errorText.startsWith("skip_upload_existing_platform_id") ||
-                errorText.startsWith("missing_content_length") ||
+                errorText.startsWith("missing_content_length") ||               // legacy path
+                errorText.startsWith("missing_presigned_or_length") ||           // new path
                 (/^resumable_put_failed_4\d\d/.test(errorText) && !/429/.test(errorText)) ||
                 errorText.startsWith("oauth_refresh_failed_400");
 
@@ -781,7 +876,7 @@ export default {
                 ok: false,
                 status_code: 500,
                 duration_ms: Date.now() - t0,
-              });
+              }, SERVICE_QUEUE);
 
               if (nonRetryable) {
                 if (pubId) {
@@ -795,47 +890,39 @@ export default {
                   } catch (_) {}
                 }
                 msg.ack();
+                cnt_errors++;
                 continue;
               }
 
               // Retryable: keep status as-is (scheduling), we already bumped retry_count & last_error
               msg.retry();
+              cnt_retried++;
             }
 
     }
-  },
-
-  // ----- Minimal HTTP surface: manual poll path -----
-  async fetch(req, env, ctx) {
-    const url = new URL(req.url);
-    const reqId = shortId();
-    const t0 = Date.now();
-
-    try {
-      if (req.method === "POST" && url.pathname === "/yt/poll-scheduled") {
-        const out = await pollScheduled(env, reqId);
-        return new Response(JSON.stringify(out), {
-          headers: { "Content-Type": "application/json" },
-          status: 200,
-        });
+    await safeLog(env, {
+      level: "info",
+      service: SERVICE_QUEUE,
+      message: "youtube queue summary",
+      meta: {
+        request_id: batch_id,
+        batch_id,
+        route: "queue/PUB_YOUTUBE_Q",
+        method: "queue",
+        status_code: 200,
+        ok: true,
+        promote: true,
+        batch_size: batchSize,
+        acked: cnt_acked,
+        retried: cnt_retried,
+        errors: cnt_errors,
+        skipped: cnt_skipped
       }
-      return new Response("Not Found", { status: 404 });
-    } catch (err) {
-      await logError(env, "poll_scheduled_failed", {
-        request_id: reqId,
-        route: "POST /yt/poll-scheduled",
-        method: "POST",
-        error: String(err?.message || err),
-        ok: false,
-        status_code: 500,
-        duration_ms: Date.now() - t0,
-      });
-      return new Response("Internal Error", { status: 500 });
-    }
-  },
+    });
+   },
 
   // ----- Cron hook (disabled until you add a trigger in wrangler.toml) -----
-  async scheduled(controller, env, ctx) {
+    async scheduled(controller, env, ctx) {
     const reqId = shortId();
     try {
       await pollScheduled(env, reqId);
