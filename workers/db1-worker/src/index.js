@@ -1,3 +1,4 @@
+//gr8r-db1-worker v1.4.9 FIXES: add content lenght and type to POST /videos/get-presigned route
 //gr8r-db1-worker v1.4.7 FIXES: fixt for channel.retry_count default
 //gr8r-db1-worker v1.4.6 FIXES: removed extra get-presigned handler... chatGPT... RMEs
 //gr8r-db1-worker v1.4.5 FIXES: if request missing URL grabs from db1.videos.r2url
@@ -1117,14 +1118,26 @@ export default {
           }
         });
 
+        // fetch content_type and file_size_bytes for the response contract
+        const metaRow = await env.DB
+          .prepare(`SELECT content_type, file_size_bytes FROM videos WHERE id = ? LIMIT 1`)
+          .bind(video_id)
+          .first();
+
         return new Response(JSON.stringify({
           ok: true,
           video_id,
-          r2presigned: pres.url,
+          // Return an OBJECT with url + sizes/types (what the youtube worker expects)
+          r2presigned: {
+            url: pres.url,
+            contentType: metaRow?.content_type || null,
+            contentLength: Number(metaRow?.file_size_bytes || 0)
+          },
           r2presigned_expires_at: expiresIso,
           presign_expires_in_ms: remaining
         }), {
-          status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
+          status: 200,
+          headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
         });
 
       } catch (err) {
