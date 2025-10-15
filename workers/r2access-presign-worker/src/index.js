@@ -1,3 +1,4 @@
+// gr8r-r2access-presign-worker v1.0.5 — fixing encoding issues in function signV4QueryGET
 // gr8r-r2access-presign-worker v1.0.4 — fixing bucket name in BUCKET variable line 30
 // gr8r-r2access-presign-worker v1.0.3 — fixing double encoding of pre-sign URL
 // gr8r-r2access-presign-worker v1.0.2 — fixing issues primarily parseR2URL was breaking... ChatGPT RMEs
@@ -127,37 +128,41 @@ async function sha256Hex(str) {
 }
 
 async function signV4QueryGET({ accountId, accessKeyId, secretAccessKey, bucket, key, region, ttlSeconds }) {
-  // R2 S3 endpoint (path-style)
-  // https://<accountId>.r2.cloudflarestorage.com/<bucket>/<key>?X-Amz-Algorithm=AWS4-HMAC-SHA256...
   const host = `${accountId}.r2.cloudflarestorage.com`;
   const endpoint = `https://${host}`;
   const encodedKey = key.split("/").map(encodeURIComponent).join("/");
   const canonicalUri = `/${encodeURIComponent(bucket)}/${encodedKey}`;
 
   const now = new Date();
-  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, ""); // YYYYMMDDTHHMMSSZ
-  const datestamp = amzDate.slice(0, 8);                          // YYYYMMDD
+  const amzDate   = now.toISOString().replace(/[:-]|\.\d{3}/g, ""); // YYYYMMDDTHHMMSSZ
+  const datestamp = amzDate.slice(0, 8);
   const algorithm = "AWS4-HMAC-SHA256";
-  const service = "s3";
+  const service   = "s3";
   const signedHeaders = "host";
   const credentialScope = `${datestamp}/${region}/${service}/aws4_request`;
 
-  const params = new URLSearchParams({
-    "X-Amz-Algorithm": algorithm,
-    "X-Amz-Credential": `${accessKeyId}/${credentialScope}`, // no pre-encode
-    "X-Amz-Date": amzDate,
-    "X-Amz-Expires": String(Math.max(1, Math.min(ttlSeconds, 604800))),
+  // 1) DO NOT pre-encode this value; let URLSearchParams encode once.
+  const qs = new URLSearchParams({
+    "X-Amz-Algorithm":    algorithm,
+    "X-Amz-Credential":   `${accessKeyId}/${credentialScope}`,   // ✅ no encodeURIComponent here
+    "X-Amz-Date":         amzDate,
+    "X-Amz-Expires":      String(Math.max(1, Math.min(ttlSeconds, 604800))),
     "X-Amz-SignedHeaders": signedHeaders,
   });
 
-  const payloadHash = "UNSIGNED-PAYLOAD";
+  // 2) For SigV4, canonical query must be sorted by key then value.
+  const sorted = [...qs.entries()]
+    .map(([k, v]) => [encodeURIComponent(k), encodeURIComponent(v)])
+    .sort(([ak, av], [bk, bv]) => (ak === bk ? (av < bv ? -1 : av > bv ? 1 : 0) : (ak < bk ? -1 : 1)))
+    .map(([k, v]) => `${k}=${v}`)
+    .join("&");
 
-  const canonicalQuery = params.toString();
+  const payloadHash = "UNSIGNED-PAYLOAD";
   const canonicalHeaders = `host:${host}\n`;
   const canonicalRequest = [
     "GET",
     canonicalUri,
-    canonicalQuery,
+    sorted,                 // ✅ sorted query string
     canonicalHeaders,
     signedHeaders,
     payloadHash,
@@ -172,7 +177,6 @@ async function signV4QueryGET({ accountId, accessKeyId, secretAccessKey, bucket,
     canonicalRequestHash,
   ].join("\n");
 
-  // Derive signing key
   const kDate    = await hmac(`AWS4${secretAccessKey}`, datestamp);
   const kRegion  = await hmac(kDate, region);
   const kService = await hmac(kRegion, service);
@@ -180,7 +184,8 @@ async function signV4QueryGET({ accountId, accessKeyId, secretAccessKey, bucket,
 
   const signature = await hmacHex(kSigning, stringToSign);
 
-  return `${endpoint}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+  // 3) Build the final URL using the already-sorted string.
+  return `${endpoint}${canonicalUri}?${sorted}&X-Amz-Signature=${signature}`;
 }
 
 // ---- main worker ----
