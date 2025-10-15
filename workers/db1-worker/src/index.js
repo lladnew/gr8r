@@ -1,3 +1,4 @@
+//gr8r-db1-worker v1.5.0 ADDED: add update videos.record_modified when pre-signed URLs added/changed
 //gr8r-db1-worker v1.4.9 FIXES: add correction for malformed pre-signed URLs
 //gr8r-db1-worker v1.4.8 FIXES: add content lenght and type to POST /videos/get-presigned route
 //gr8r-db1-worker v1.4.7 FIXES: fixt for channel.retry_count default
@@ -363,9 +364,13 @@ async function d1GetVideoById(env, id) {
   return r || null;
 }
 
-async function d1UpdatePresign(env, id, url, expiresIso) {
+async function db1UpdatePresign(env, id, url, expiresIso) {
   await env.DB
-    .prepare(`UPDATE videos SET r2presigned = ?, r2presigned_expires_at = ? WHERE id = ?`)
+    .prepare(`
+      UPDATE videos
+      SET r2presigned = ?, r2presigned_expires_at = ?, record_modified = ?
+      WHERE id = ?
+    `)
     .bind(url, expiresIso, id)
     .run();
 }
@@ -1121,7 +1126,7 @@ export default {
 
         // persist to videos
         const expiresIso = pres.expires_at;
-        await d1UpdatePresign(env, video_id, presignedUrl, expiresIso);
+        await db1UpdatePresign(env, video_id, presignedUrl, expiresIso);
 
         const remaining = msUntilExpiry(expiresIso);
 
