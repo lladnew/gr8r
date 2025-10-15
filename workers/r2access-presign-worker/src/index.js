@@ -1,3 +1,4 @@
+// gr8r-r2access-presign-worker v1.0.4 — fixing bucket name in BUCKET variable line 30
 // gr8r-r2access-presign-worker v1.0.3 — fixing double encoding of pre-sign URL
 // gr8r-r2access-presign-worker v1.0.2 — fixing issues primarily parseR2URL was breaking... ChatGPT RMEs
 // gr8r-r2access-presign-worker v1.0.1 — presign GET for R2 objects with Grafana logging
@@ -26,7 +27,7 @@ async function safeLog(env, entry) {
 const SERVICE = "r2access-presign-worker";
 
 // ---- config you can tweak in one place ----
-const BUCKET = "videos";                 // single source of truth for your R2 bucket name
+const BUCKET = "videos-gr8r";                 // single source of truth for your R2 bucket name
 const CUSTOM_VIDEO_HOST = "videos.gr8r.com"; // how r2_url will usually look
 
 // ---- helpers ----

@@ -2,7 +2,7 @@ name = "gr8r-r2access-presign-worker"
 main = "src/index.js"
 compatibility_date = "2025-10-09"
 account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
-workers_dev = false
+workers_dev = true
 
 [observability.logs]
 enabled = true
