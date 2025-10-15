@@ -1,4 +1,5 @@
-//gr8r-db1-worker v1.4.9 FIXES: add content lenght and type to POST /videos/get-presigned route
+//gr8r-db1-worker v1.4.9 FIXES: add correction for malformed pre-signed URLs
+//gr8r-db1-worker v1.4.8 FIXES: add content lenght and type to POST /videos/get-presigned route
 //gr8r-db1-worker v1.4.7 FIXES: fixt for channel.retry_count default
 //gr8r-db1-worker v1.4.6 FIXES: removed extra get-presigned handler... chatGPT... RMEs
 //gr8r-db1-worker v1.4.5 FIXES: if request missing URL grabs from db1.videos.r2url
@@ -49,6 +50,7 @@ import { getSecret } from "../../../lib/secrets.js";
 
 // Grafana logging shared script
 import { createLogger } from "../../../lib/grafana.js";
+
 // Safe logger: always use this; caches underlying logger internally
 let _logger;
 const safeLog = async (env, entry) => {
@@ -1100,10 +1102,26 @@ export default {
             status: 502, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
           });
         }
+        // --- HOTFIX: normalize double-encoded slashes in X-Amz-Credential (e.g., %252F -> %2F)
+        let presignedUrl = pres.url;
+        if (/%252F/i.test(presignedUrl)) {
+          const fixed = presignedUrl.replace(/%252F/g, "%2F");
+          await safeLog(env, {
+            level: "warn",
+            service: "db1-presign",
+            message: "normalized double-encoded credential slashes in presigned URL",
+            meta: { request_id: req_id, video_id, status_code: 200, ok: true }
+          });
+          presignedUrl = fixed;
+        }
+        // (optional) also normalize any accidental %252C -> %2C
+        if (/%252C/i.test(presignedUrl)) {
+          presignedUrl = presignedUrl.replace(/%252C/g, "%2C");
+        }
 
         // persist to videos
         const expiresIso = pres.expires_at;
-        await d1UpdatePresign(env, video_id, pres.url, expiresIso);
+        await d1UpdatePresign(env, video_id, presignedUrl, expiresIso);
 
         const remaining = msUntilExpiry(expiresIso);
 
@@ -1129,7 +1147,7 @@ export default {
           video_id,
           // Return an OBJECT with url + sizes/types (what the youtube worker expects)
           r2presigned: {
-            url: pres.url,
+            url: presignedUrl,
             contentType: metaRow?.content_type || null,
             contentLength: Number(metaRow?.file_size_bytes || 0)
           },
