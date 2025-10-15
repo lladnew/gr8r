@@ -1,3 +1,4 @@
+// gr8r-r2access-presign-worker v1.0.3 — fixing double encoding of pre-sign URL
 // gr8r-r2access-presign-worker v1.0.2 — fixing issues primarily parseR2URL was breaking... ChatGPT RMEs
 // gr8r-r2access-presign-worker v1.0.1 — presign GET for R2 objects with Grafana logging
 
@@ -142,9 +143,9 @@ async function signV4QueryGET({ accountId, accessKeyId, secretAccessKey, bucket,
 
   const params = new URLSearchParams({
     "X-Amz-Algorithm": algorithm,
-    "X-Amz-Credential": `${encodeURIComponent(accessKeyId + "/" + credentialScope)}`,
+    "X-Amz-Credential": `${accessKeyId}/${credentialScope}`, // no pre-encode
     "X-Amz-Date": amzDate,
-    "X-Amz-Expires": String(Math.max(1, Math.min(ttlSeconds, 604800))), // max 7 days
+    "X-Amz-Expires": String(Math.max(1, Math.min(ttlSeconds, 604800))),
     "X-Amz-SignedHeaders": signedHeaders,
   });
 
