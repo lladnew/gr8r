@@ -365,6 +365,7 @@ async function d1GetVideoById(env, id) {
 }
 
 async function db1UpdatePresign(env, id, url, expiresIso) {
+  const now = new Date().toISOString();
   await env.DB
     .prepare(`
       UPDATE videos
