@@ -371,7 +371,7 @@ async function db1UpdatePresign(env, id, url, expiresIso) {
       SET r2presigned = ?, r2presigned_expires_at = ?, record_modified = ?
       WHERE id = ?
     `)
-    .bind(url, expiresIso, id)
+    .bind(url, expiresIso, now, id)
     .run();
 }
 
