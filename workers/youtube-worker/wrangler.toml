@@ -15,6 +15,10 @@ max_batch_timeout = 5
 REQUIRE_FUTURE_SCHEDULE = "1"
 
 [[services]]
+binding = "YTPLSYNC"
+service = "gr8r-ytplsync-worker"
+
+[[services]]
 binding = "DB1"
 service  = "gr8r-db1-worker"
 
@@ -22,6 +26,11 @@ service  = "gr8r-db1-worker"
 binding     = "DB1_INTERNAL_KEY"
 store_id    = "23d622f0d3b8499fa021fad6149af8c9"
 secret_name = "DB1_INTERNAL_KEY"
+
+[[secrets_store_secrets]]
+binding = "INTERNAL_WORKER_KEY"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "INTERNAL_WORKER_KEY"
 
 [[secrets_store_secrets]]
 binding = "GRAFANACLOUD_GR8R_LOGS_KEY"
@@ -55,3 +64,4 @@ secret_name = "YOUTUBE_REFRESH_TOKEN"
 
 [triggers]
 crons = ["*/10 * * * *"]
+

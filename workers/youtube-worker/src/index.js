@@ -1,3 +1,4 @@
+// v1.0.5 gr8r-youtube-worker ADDED: call to ytplsync-worker if video title includes Pivot Year
 // v1.0.4 gr8r-youtube-worker CHANGE: YT upload redesign to use pre-signed URL's from db1.videos to upload directly to Youtube also modified logging to better fit defined process
 // v1.0.3 gr8r-youtube-worker CHANGE: switch to chunked resumable uploads to avoid 413; add richer error capture & last-range logging
 // v1.0.2 gr8r-youtube-worker ADDED: retry_count logging and tweaked Grafana logging message
@@ -88,6 +89,19 @@ async function logWarn(env, message, meta = {}, service = SERVICE) {
 const SERVICE_QUEUE = "queue-consume";
 const SERVICE_UPLOAD = "yt-upload";
 const SERVICE_POLL = "poll-scheduled";
+
+// ---------- Pivot Year playlist sync (title-only) ----------
+const YTPLSYNC = {
+  // Internal endpoint for the ytplsync worker:
+  PATH: "/internal/api/youtube/playlist-sync",  // binding target path
+  // Case-insensitive match; keep loose spacing: "Pivot Year ..."
+  TITLE_REGEX: /(^|\b)Pivot\s*Year(\b|:|-)/i,
+};
+
+// Returns true when title looks like a Pivot Year post
+function isPivotYearTitle(title) {
+  return YTPLSYNC.TITLE_REGEX.test(String(title || ""));
+}
 
 // ADDED: upload sizing (CF Workers subrequest body is limited)
 const MAX_SINGLESHOT = 95 * 1024 * 1024;         // ~95 MiB safety margin
@@ -449,6 +463,26 @@ async function db1Update(env, publishing_id, patch, reqMeta) {
   return res.json().catch(() => ({}));
 }
 
+async function callPivotPlaylistSync(env, { videoId, title }, reqId) {
+  const key = await getSecret(env, "INTERNAL_WORKER_KEY");
+  if (!key) throw new Error("missing_INTERNAL_WORKER_KEY_for_ytplsync");
+
+  const res = await env.YTPLSYNC.fetch(YTPLSYNC.PATH, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${key}`,
+      "x-request-id": reqId || shortId(),
+    },
+    body: JSON.stringify({ videoId, title }),
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`ytplsync_call_failed_${res.status}:${txt.slice(0,300)}`);
+  }
+  return res.json().catch(() => ({}));
+}
 
 async function db1ListScheduled(env, payload, reqMeta) {
   const res = await env.DB1.fetch("http://db1/publishing/list-scheduled", {
@@ -694,6 +728,22 @@ async function processMessage(env, msg, reqId) {
     },
     { request_id: reqId }
   );
+  // If this title is a Pivot Year post, sync playlist (non-blocking on failure)
+  try {
+    if (isPivotYearTitle(title)) {
+      await callPivotPlaylistSync(env, { videoId: ytId, title }, reqId);
+      if (env.VERBOSE_YT === "1") {
+        console.log(`[${SERVICE_UPLOAD}] ytplsync ok publishing_id=${publishing_id} yt=${ytId}`);
+      }
+    }
+  } catch (e) {
+    await logWarn(env, "ytplsync_call_warning", {
+      request_id: reqId,
+      publishing_id,
+      youtube_video_id: ytId,
+      error: String(e?.message || e),
+    }, SERVICE_UPLOAD);
+  }
 
     if (env.VERBOSE_YT === "1") {
       console.log(`[${SERVICE}] upload ok publishing_id=${publishing_id} yt=${ytId} scheduled=${scheduled}`);
