@@ -36,6 +36,11 @@ store_id = "23d622f0d3b8499fa021fad6149af8c9"
 secret_name = "DB1_INTERNAL_KEY"
 
 [[secrets_store_secrets]]
+binding = "INTERNAL_WORKER_KEY"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "INTERNAL_WORKER_KEY"
+
+[[secrets_store_secrets]]
 binding = "GRAFANACLOUD_GR8R_LOGS_KEY"
 store_id = "23d622f0d3b8499fa021fad6149af8c9"
 secret_name = "GRAFANACLOUD_GR8R_LOGS_KEY"

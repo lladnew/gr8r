@@ -1,3 +1,4 @@
+// v1.4.6 gr8r-revai-callback-worker  ADDED: INTERNAL_WORKER_KEY for calling socialcopy-worker
 // v1.4.6 gr8r-revai-callback-worker  EDIT: tweaked grafana logging success message to include video title
 // v1.4.5 gr8r-revai-callback-worker ADDED: function db1ErrorWriteback() to set videos_status to 'Error' if this worker fails for any reason, removed late video_id check
 // v1.4.4 gr8r-revai-callback-worker ADDED: update to publishing table to mark rows 'queued' and ready for publishing, changed logging to safeLog to keep worker from crashing on log issues
@@ -52,6 +53,16 @@ const safeLog = async (env, entry) => {
     console.log('LOG_FAIL', entry?.service || 'unknown', e?.stack || e?.message || e);
   }
 };
+
+// --- ADD (cache + getter for INTERNAL_WORKER_KEY) ---
+let _iwkCache;
+async function getInternalWorkerKey(env) {
+  if (_iwkCache) return _iwkCache;
+  const key = await getSecret(env, "INTERNAL_WORKER_KEY");
+  _iwkCache = (key ?? "").toString().trim();
+  if (!_iwkCache) throw new Error("INTERNAL_WORKER_KEY empty after resolution");
+  return _iwkCache;
+}
 
 export default {
   async fetch(request, env, ctx) {
@@ -250,62 +261,82 @@ export default {
         if (fetchText && fetchText.trim()) {
           let sDur;
           const s0 = Date.now();
-          try {
-            const socialCopyResponse = await env.SOCIALCOPY_WORKER.fetch('https://internal/api/socialcopy', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ transcript: fetchText, title })
-            });
-
-            if (!socialCopyResponse.ok) {
-              sDur = Date.now() - s0;
-              await safeLog(env, {
-                service: "socialcopy",
-                level: "error",
-                message: "socialcopy error",
-                meta: { request_id, job_id: id, ok: false, status_code: socialCopyResponse.status, duration_ms: sDur, reason: "socialcopy_bad_status" }
-              });
-              socialCopyFailed = true;
-            } else {
-              socialCopy = await socialCopyResponse.json();
-              sDur = Date.now() - s0;
-
-              const has_hook = !!(socialCopy?.hook && String(socialCopy.hook).trim());
-              const has_body = !!(socialCopy?.body && String(socialCopy.body).trim());
-              const has_cta = !!(socialCopy?.cta && String(socialCopy.cta).trim());
-              const has_hashtags = !!(socialCopy?.hashtags && String(socialCopy.hashtags).trim());
-
-              if (!(has_hook || has_body || has_cta || has_hashtags)) {
-                await safeLog(env, {
-                  service: "socialcopy",
-                  level: "error",
-                  message: "socialcopy empty",
-                  meta: { request_id, job_id: id, ok: false, duration_ms: sDur, reason: "socialcopy_empty" }
-                });
-                socialCopyFailed = true;
-              } else {
-                // success grafana log removed.
-                console.log('[revai-callback] social copy generated', {
-                  request_id,
-                  job_id: id,
-                  duration_ms: sDur,
-                  has_hook,
-                  has_body,
-                  has_cta,
-                  has_hashtags
-                });
-
-              }
-            }
-          } catch (err) {
+          // --- ADD (internal auth for socialcopy-worker) ---
+          const internalKeyForSC = await getInternalWorkerKey(env);
+          if (!internalKeyForSC) {
             sDur = Date.now() - s0;
             await safeLog(env, {
               service: "socialcopy",
               level: "error",
-              message: "socialcopy exception",
-              meta: { request_id, job_id: id, ok: false, duration_ms: sDur, reason: "socialcopy_exception" }
+              message: "missing INTERNAL_WORKER_KEY",
+              meta: { request_id, job_id: id, ok: false, duration_ms: sDur, reason: "missing_internal_key" }
             });
             socialCopyFailed = true;
+          } else {
+            try {
+              const socialCopyResponse = await env.SOCIALCOPY_WORKER.fetch('https://internal/api/socialcopy', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${internalKeyForSC}`
+                },
+                body: JSON.stringify({ transcript: fetchText, title })
+              });
+
+              if (!socialCopyResponse.ok) {
+                sDur = Date.now() - s0;
+                await safeLog(env, {
+                  service: "socialcopy",
+                  level: "error",
+                  message: "socialcopy error",
+                  meta: {
+                    request_id, job_id: id, ok: false,
+                    status_code: socialCopyResponse.status,
+                    duration_ms: sDur,
+                    reason: socialCopyResponse.status === 401 ? "socialcopy_unauthorized" : "socialcopy_bad_status"
+                  }
+                });
+                socialCopyFailed = true;
+              } else {
+                socialCopy = await socialCopyResponse.json();
+                sDur = Date.now() - s0;
+
+                const has_hook = !!(socialCopy?.hook && String(socialCopy.hook).trim());
+                const has_body = !!(socialCopy?.body && String(socialCopy.body).trim());
+                const has_cta = !!(socialCopy?.cta && String(socialCopy.cta).trim());
+                const has_hashtags = !!(socialCopy?.hashtags && String(socialCopy.hashtags).trim());
+
+                if (!(has_hook || has_body || has_cta || has_hashtags)) {
+                  await safeLog(env, {
+                    service: "socialcopy",
+                    level: "error",
+                    message: "socialcopy empty",
+                    meta: { request_id, job_id: id, ok: false, duration_ms: sDur, reason: "socialcopy_empty" }
+                  });
+                  socialCopyFailed = true;
+                } else {
+                  // success grafana log removed.
+                  console.log('[revai-callback] social copy generated', {
+                    request_id,
+                    job_id: id,
+                    duration_ms: sDur,
+                    has_hook,
+                    has_body,
+                    has_cta,
+                    has_hashtags
+                  });
+                }
+              }
+            } catch (err) {
+              sDur = Date.now() - s0;
+              await safeLog(env, {
+                service: "socialcopy",
+                level: "error",
+                message: "socialcopy exception",
+                meta: { request_id, job_id: id, ok: false, duration_ms: sDur, reason: "socialcopy_exception" }
+              });
+              socialCopyFailed = true;
+            }
           }
         } // end: only run SocialCopy when transcript present
 
