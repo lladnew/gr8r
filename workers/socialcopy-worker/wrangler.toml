@@ -7,5 +7,12 @@ account_id = "6a22f9b8ad27ffcc9719dd53a78bcedf"
 [observability.logs]
 enabled = true
 
-# No secrets declared here — use the Cloudflare dashboard to add:
-# OPENAI_API_KEY
+[[secrets_store_secrets]]
+binding = "INTERNAL_WORKER_KEY"
+store_id = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "INTERNAL_WORKER_KEY"
+
+[[secrets_store_secrets]]
+binding     = "OPENAI_API_KEY"
+store_id    = "23d622f0d3b8499fa021fad6149af8c9"
+secret_name = "OPENAI_API_KEY"
