@@ -1,0 +1,17 @@
+name: Deploy gr8r-ytplsync-worker
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "workers/ytplsync-worker/**"
+      - ".github/workflows/deploy-ytplsync-worker.yml"
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_deploy-worker.yml
+    with:
+      workingDirectory: workers/ytplsync-worker
+      workerName: gr8r-ytplsync-worker
+    secrets:
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
