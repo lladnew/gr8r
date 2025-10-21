@@ -1,3 +1,4 @@
+// v1.0.6 gr8r-youtube-worker EDIT: removed noisy queue summary logs and fixed video live message to include title
 // v1.0.5 gr8r-youtube-worker ADDED: call to ytplsync-worker if video title includes Pivot Year
 // v1.0.4 gr8r-youtube-worker CHANGE: YT upload redesign to use pre-signed URL's from db1.videos to upload directly to Youtube also modified logging to better fit defined process
 // v1.0.3 gr8r-youtube-worker CHANGE: switch to chunked resumable uploads to avoid 413; add richer error capture & last-range logging
@@ -499,7 +500,7 @@ async function db1ListScheduled(env, payload, reqMeta) {
     const txt = await res.text().catch(() => "");
     throw new Error(`db1_list_scheduled_failed_${res.status}:${txt}`);
   }
-  // returns { rows: [{ publishing_id, platform_media_id }, ...] }
+  // returns { rows: [{ publishing_id, platform_media_id, title }, ...] }
   return res.json();
 }
 
@@ -822,11 +823,13 @@ async function pollScheduled(env, reqId) {
       const publishing_id = idMap[ytId].publishing_id;
       await db1Update(env, publishing_id, { status: "posted", posted_at: nowIso() }, { request_id: reqId });
       updated++;
-      const videoTitle = (idMap[ytId]?.title || "").slice(0,120);
+
+      const videoTitle = (idMap[ytId]?.title || "").slice(0, 120);
+
       await safeLog(env, {
         level: "info",
         service: SERVICE_POLL,
-        message: `youtube video live "${videoTitle || ytId}"`,
+        message: videoTitle ? `youtube video live "${videoTitle}"` : "youtube video live",
         meta: {
           request_id: reqId,
           route: "CRON /yt/poll-scheduled",
@@ -838,26 +841,10 @@ async function pollScheduled(env, reqId) {
           youtube_video_id: ytId,
           title: videoTitle || null
         }
-        });
-
+      });
     }
   }
   console.log(`[${SERVICE}] poll ok checked=${rows.length} updated=${updated}`);
-  await safeLog(env, {
-    level: "info",
-    service: SERVICE_POLL,
-    message: "youtube poll summary",
-    meta: {
-      request_id: reqId,
-      route: "CRON /yt/poll-scheduled",
-      method: "SCHEDULED",
-      status_code: 200,
-      ok: true,
-      promote: true,
-      checked: rows.length,
-      updated
-    }
-  });
   return { ok: true, checked: rows.length, updated };
 }
 
@@ -950,25 +937,6 @@ export default {
             }
 
     }
-    await safeLog(env, {
-      level: "info",
-      service: SERVICE_QUEUE,
-      message: "youtube queue summary",
-      meta: {
-        request_id: batch_id,
-        batch_id,
-        route: "queue/PUB_YOUTUBE_Q",
-        method: "queue",
-        status_code: 200,
-        ok: true,
-        promote: true,
-        batch_size: batchSize,
-        acked: cnt_acked,
-        retried: cnt_retried,
-        errors: cnt_errors,
-        skipped: cnt_skipped
-      }
-    });
    },
 
   // ----- Cron hook (disabled until you add a trigger in wrangler.toml) -----
