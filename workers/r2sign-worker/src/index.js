@@ -1,3 +1,4 @@
+// gr8r-r2sign-worker v1.4.2 EDIT: edited log success message to include filename for quick reference
 // gr8r-r2sign-worker v1.4.1 CHANGE: migrate to safeLog + Secrets Store and update to current logging best practice standard
 // gr8r-r2sign-worker v1.4.0
 // added logging to Grafana and a worker response
@@ -152,7 +153,7 @@ export default {
       await safeLog(env, {
         ...baseLog,
         level: "info",
-        message: "Presigned upload URL generated",
+        message: `Presigned upload URL generated: ${filename}`,
         status_code: 200,
         ok: true,
         duration_ms: Date.now() - t0,
