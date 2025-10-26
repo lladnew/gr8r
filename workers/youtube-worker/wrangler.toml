@@ -13,6 +13,8 @@ max_batch_timeout = 5
 
 [vars]
 REQUIRE_FUTURE_SCHEDULE = "1"
+YTPLSYNC_DEBUG = "1"       # turn on temporary debug logging
+VERBOSE_YT="1"
 
 [[services]]
 binding = "YTPLSYNC"

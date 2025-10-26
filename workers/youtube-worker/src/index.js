@@ -1,3 +1,4 @@
+// v1.0.7 gr8r-youtube-worker ADDED: debug logging for if Pivot Year - playlist add call -set YTPLSYNC_DEBUG to 1
 // v1.0.6 gr8r-youtube-worker EDIT: removed noisy queue summary logs and fixed video live message to include title
 // v1.0.5 gr8r-youtube-worker ADDED: call to ytplsync-worker if video title includes Pivot Year
 // v1.0.4 gr8r-youtube-worker CHANGE: YT upload redesign to use pre-signed URL's from db1.videos to upload directly to Youtube also modified logging to better fit defined process
@@ -626,6 +627,23 @@ async function processMessage(env, msg, reqId) {
     throw new Error("missing_required_fields(publishing_id|video_id|title)");
   }
 
+  // DEBUG: Pivot Year gate (guarded) — remove when done
+  if (env.YTPLSYNC_DEBUG === "1") {
+    const pivot_match = isPivotYearTitle(title);
+    await safeLog(env, {
+      level: "info",
+      service: SERVICE_UPLOAD,
+      message: "ytplsync debug #1: gate-eval",
+      meta: {
+        request_id: reqId,
+        title,                                  // exact title seen by worker
+        regex: String(YTPLSYNC.TITLE_REGEX),    // the regex we’re using
+        pivot_match,                            // true/false
+        promote: true,
+      },
+    });
+  }
+
   // Always pull presigned URL + metadata from DB1 by video_id
   const pres = await db1GetPresigned(env, video_id, { request_id: reqId });
   const r2 = pres?.r2presigned || {};
@@ -730,6 +748,24 @@ async function processMessage(env, msg, reqId) {
     { request_id: reqId }
   );
   // If this title is a Pivot Year post, sync playlist (non-blocking on failure)
+  // DEBUG: About to call ytplsync (guarded) — remove when done
+  if (env.YTPLSYNC_DEBUG === "1") {
+    const pivot_match = isPivotYearTitle(title);
+    await safeLog(env, {
+      level: "info",
+      service: SERVICE_UPLOAD,
+      message: "ytplsync debug #2: about-to-call",
+      meta: {
+        request_id: reqId,
+        pivot_match,                             // gate result at call site
+        binding_present: !!env.YTPLSYNC,         // service binding wired?
+        binding_fetch_type: typeof env.YTPLSYNC?.fetch,
+        path: YTPLSYNC.PATH,                     // target path we’ll hit
+        promote: true,
+      },
+    });
+  }
+
   try {
     if (isPivotYearTitle(title)) {
       await callPivotPlaylistSync(env, { videoId: ytId, title }, reqId);
