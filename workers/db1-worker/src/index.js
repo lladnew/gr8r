@@ -1,3 +1,4 @@
+// gr8r-db1-worker v1.5.1 CHANGE: /publishing/list-scheduled now returns `title` with platform_media_id, quiet presign success log and edit richer publishing queue claim message
 //gr8r-db1-worker v1.5.0 ADDED: add update videos.record_modified when pre-signed URLs added/changed
 //gr8r-db1-worker v1.4.9 FIXES: add correction for malformed pre-signed URLs
 //gr8r-db1-worker v1.4.8 FIXES: add content lenght and type to POST /videos/get-presigned route
@@ -864,8 +865,25 @@ export default {
         `;
         const joined = await env.DB.prepare(sqlJoin).bind(...ids).all();
 
-        await safeLog(env, { level: "info", service: "db1-claim", message: "claimed",
-        meta: { request_id: req_id, channel_key, count: joined?.results?.length || 0, status_code: 200, ok: true, duration_ms: Date.now() - tStart }});
+        // Include channel + title(s) in the message. For batches, show first + "+N more".
+        const channelLabel = (channel_key || "").toLowerCase(); // ex: "youtube"
+        const count = joined?.results?.length || 0;
+        const firstTitle = (joined?.results?.[0]?.title || "").trim();
+        const extra = count > 1 ? ` (+${count - 1} more)` : "";
+
+        await safeLog(env, {
+        level: "info",
+        service: "db1-claim",
+        message: `${channelLabel} scheduler claimed ${firstTitle ? `"${firstTitle}"` : "items"}${extra}`,
+        meta: {
+            request_id: req_id,
+            channel_key,
+            count,
+            status_code: 200,
+            ok: true,
+            duration_ms: Date.now() - tStart
+        }
+        });
 
         return new Response(JSON.stringify({ rows: joined?.results || [] }), {
         status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
@@ -968,14 +986,22 @@ export default {
             status: 400, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
         });
         }
-
         const sql = `
-        SELECT id AS publishing_id, platform_media_id
-        FROM Publishing
-        WHERE status = 'scheduled' AND channel_key = ? AND platform_media_id IS NOT NULL
-        ORDER BY scheduled_at ASC, id ASC
-        LIMIT ?
-        `;
+            SELECT
+                p.id                  AS publishing_id,
+                p.platform_media_id   AS platform_media_id,
+                v.title               AS title
+            FROM Publishing p
+            JOIN videos v ON v.id = p.video_id
+            WHERE
+                p.status = 'scheduled'
+                AND p.channel_key = ?
+                AND p.platform_media_id IS NOT NULL
+            ORDER BY
+                p.scheduled_at ASC,
+                p.id ASC
+            LIMIT ?
+            `;
         const r = await env.DB.prepare(sql).bind(channel_key, limit).all();
         return new Response(JSON.stringify({ rows: r?.results || [] }), {
         status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) }
@@ -1131,15 +1157,13 @@ export default {
 
         const remaining = msUntilExpiry(expiresIso);
 
-        await safeLog(env, {
-          level: "info",
-          service: "db1-presign",
-          message: "presign ok",
-          meta: {
-            request_id: req_id, video_id, requester, reason,
-            presign_expires_in_ms: remaining, ok: true, status_code: 200,
-            duration_ms: Date.now() - tStart
-          }
+        // quiet success log (console only) to reduce Grafana noise
+        console.log("[db1-presign] presign ok", {
+        request_id: req_id,
+        video_id,
+        requester,
+        reason,
+        presign_expires_in_ms: remaining
         });
 
         // fetch content_type and file_size_bytes for the response contract
