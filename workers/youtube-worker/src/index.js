@@ -1,3 +1,4 @@
+// v1.0.8 gr8r-youtube-worker ADDED: debug logging 3 and 4 -set YTPLSYNC_DEBUG to 1
 // v1.0.7 gr8r-youtube-worker ADDED: debug logging for if Pivot Year - playlist add call -set YTPLSYNC_DEBUG to 1
 // v1.0.6 gr8r-youtube-worker EDIT: removed noisy queue summary logs and fixed video live message to include title
 // v1.0.5 gr8r-youtube-worker ADDED: call to ytplsync-worker if video title includes Pivot Year
@@ -479,6 +480,25 @@ async function callPivotPlaylistSync(env, { videoId, title }, reqId) {
     body: JSON.stringify({ videoId, title }),
   });
 
+  // DEBUG #3: log response snapshot (guarded)
+  if (env.YTPLSYNC_DEBUG === "1") {
+    let preview = null;
+    try { preview = await res.clone().text(); } catch (_) {}
+    await safeLog(env, {
+      level: "info",
+      service: SERVICE_UPLOAD,
+      message: "ytplsync debug #3: response",
+      meta: {
+        request_id: reqId || shortId(),
+         status: res.status,
+        ok: res.ok,
+        content_type: res.headers.get("content-type") || null,
+        body_preview: preview ? preview.slice(0, 400) : null,
+        promote: true,
+      },
+    });
+  }
+
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(`ytplsync_call_failed_${res.status}:${txt.slice(0,300)}`);
@@ -784,6 +804,21 @@ async function processMessage(env, msg, reqId) {
 
     if (env.VERBOSE_YT === "1") {
       console.log(`[${SERVICE}] upload ok publishing_id=${publishing_id} yt=${ytId} scheduled=${scheduled}`);
+    }
+    // DEBUG #4: post-call summary (guarded)
+    if (env.YTPLSYNC_DEBUG === "1") {
+      await safeLog(env, {
+        level: "info",
+        service: SERVICE_UPLOAD,
+        message: "ytplsync debug #4: call-complete",
+        meta: {
+          request_id: reqId,
+          publishing_id,
+          youtube_video_id: ytId,
+          title: (title || "").slice(0, 120),
+          promote: true,
+        },
+      });
     }
     await safeLog(env, {
       level: "info",
