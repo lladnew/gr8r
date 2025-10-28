@@ -40,7 +40,7 @@ const defaultVisible = [
 ];
 
 const DEFAULT_SORT_COL = "scheduled_at";
-const DEFAULT_SORT: SortingState = [{ id: DEFAULT_SORT_COL, desc: false }];
+const DEFAULT_SORT: SortingState = [{ id: DEFAULT_SORT_COL, desc: true }];
 
 // ---------- Status Pills (Publishing) ----------
 const STATUS_OPTIONS = [
