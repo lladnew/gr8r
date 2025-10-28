@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 type EnumPill = {
   field: string;                 // e.g., 'status'
   options: readonly string[];    // e.g., STATUS_OPTIONS
@@ -19,7 +21,7 @@ type SpecialRender = (params: {
   value: any;
   row: Record<string, any>;
   tz: string;
-}) => React.ReactNode;
+}) => ReactNode;
 
 export type TableConfig = {
   title: string;

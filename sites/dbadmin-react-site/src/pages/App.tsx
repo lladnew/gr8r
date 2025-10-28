@@ -11,7 +11,7 @@ export default function App() {
       <h1 className="text-3xl font-bold mb-6">Admin</h1>
 
       {/* Two panels: Videos + Publishing */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 gap-6">
         {/* Videos panel */}
         <section className="bg-white rounded-2xl shadow p-3">
           <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">

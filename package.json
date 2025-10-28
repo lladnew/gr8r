@@ -5,6 +5,7 @@
   "description": "gr8r Workers and Sites (repo-pinned Wrangler)",
   "devDependencies": {
     "sharp": "^0.34.3",
+    "typescript": "^5.9.3",
     "wrangler": "4.32.0"
   },
   "main": "index.js",
