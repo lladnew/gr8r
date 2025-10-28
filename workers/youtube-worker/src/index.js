@@ -1,3 +1,4 @@
+// v1.0.9 gr8r-youtube-worker ADDED: debug logging 2.5 FIX: add absolute URL
 // v1.0.8 gr8r-youtube-worker ADDED: debug logging 3 and 4 -set YTPLSYNC_DEBUG to 1
 // v1.0.7 gr8r-youtube-worker ADDED: debug logging for if Pivot Year - playlist add call -set YTPLSYNC_DEBUG to 1
 // v1.0.6 gr8r-youtube-worker EDIT: removed noisy queue summary logs and fixed video live message to include title
@@ -469,8 +470,10 @@ async function db1Update(env, publishing_id, patch, reqMeta) {
 async function callPivotPlaylistSync(env, { videoId, title }, reqId) {
   const key = await getSecret(env, "INTERNAL_WORKER_KEY");
   if (!key) throw new Error("missing_INTERNAL_WORKER_KEY_for_ytplsync");
-
-  const res = await env.YTPLSYNC.fetch(YTPLSYNC.PATH, {
+  
+  // Build absolute URL for the service binding (host is ignored, path matters)
+  const url = new URL(YTPLSYNC.PATH, "http://ytplsync"); // dummy host
+  const req = new Request(url.toString(), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -479,6 +482,41 @@ async function callPivotPlaylistSync(env, { videoId, title }, reqId) {
     },
     body: JSON.stringify({ videoId, title }),
   });
+
+  let res;
+  if (env.YTPLSYNC_DEBUG === "1") {
+    await safeLog(env, {
+      level: "info",
+      service: SERVICE_UPLOAD,
+      message: "ytplsync debug #2.5: about-to-fetch",
+      meta: {
+        request_id: reqId || shortId(),
+        full_url: url.toString(),
+        has_binding: !!env.YTPLSYNC,
+        promote: true,
+      },
+    });
+  }
+
+  try {
+    res = await env.YTPLSYNC.fetch(req);
+  } catch (err) {
+    // DEBUG: transport/error at binding.fetch() — means target didn’t even run
+    if (env.YTPLSYNC_DEBUG === "1") {
+      await safeLog(env, {
+        level: "info",
+        service: SERVICE_UPLOAD,
+        message: "ytplsync debug #3a: fetch-threw",
+        meta: {
+          request_id: reqId || shortId(),
+          error: String(err?.message || err),
+          path: YTPLSYNC.PATH,
+          promote: true,
+        },
+      });
+    }
+    throw err;
+  }
 
   // DEBUG #3: log response snapshot (guarded)
   if (env.YTPLSYNC_DEBUG === "1") {
