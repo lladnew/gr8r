@@ -1,3 +1,4 @@
+// dbadmin-react-site/PublishingTable.tsx v1.0.1 FIXED: default sorting and clearing so that mass edit will stay
 // dbadmin-react-site/PublishingTable.tsx
 // v1.0.0 NEW: Publishing table view (mirrors VideosTable UX, publishing-specific fields)
 // - Endpoint: /db1/publishing (GET, POST, DELETE)
@@ -256,11 +257,14 @@ export default function PublishingTable() {
   const copiedCellIdRef = useRef<string | null>(null);
   const copyTimerRef = useRef<number | null>(null);
 
+  const DEFAULT_SORT: SortingState = [{ id: "title", desc: false }];
+
   const [sorting, setSorting] = useState<SortingState>(() => {
     try {
-      return JSON.parse(localStorage.getItem(STORAGE_SORTING_KEY) || "[]");
+      const saved = JSON.parse(localStorage.getItem(STORAGE_SORTING_KEY) || "null");
+      return Array.isArray(saved) && saved.length ? saved : DEFAULT_SORT;
     } catch {
-      return [];
+      return DEFAULT_SORT;
     }
   });
 
@@ -301,9 +305,11 @@ export default function PublishingTable() {
 
   // Helpers
   const getRowKey = (r: RecordType): string =>
-    r.publishing_id != null
-      ? String(r.publishing_id)
-      : String(r.platform_media_id ?? r.title ?? "");
+    String(
+      r.publishing_id ??
+      r.id ??
+      `${r.platform ?? "x"}:${r.platform_media_id ?? r.title ?? Math.random()}`
+    );
 
   // column vis persistence
   useEffect(() => {
@@ -319,7 +325,7 @@ export default function PublishingTable() {
       setSelectAllOnPage(false);
       setBulkOpen(false);
     }
-  }, [globalFilter, sorting, pagination.pageIndex, pagination.pageSize, selectedKeys.size]);
+  }, [globalFilter, pagination.pageIndex, pagination.pageSize]);
 
   // Ensure sorting references an existing column
   useEffect(() => {
